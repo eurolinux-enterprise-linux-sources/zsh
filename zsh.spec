@@ -3,7 +3,7 @@
 Summary: A powerful interactive shell
 Name: zsh
 Version: 4.3.11
-Release: 8%{?dist}
+Release: 9%{?dist}
 License: BSD
 URL: http://zsh.sunsite.dk/
 Group: System Environment/Shells
@@ -47,7 +47,7 @@ Patch29: zsh-4.3.11-coverity.patch
 # fix malloc() signal leak in lexsave() (#1267903)
 Patch30: zsh-4.3.11-malloc-signal.patch
 
-# signal-handling related fixes collected from upstream (#1311166)
+# signal-handling related fixes collected from upstream (#1311166 #1622892)
 Patch32: zsh-4.3.11-signal-handling.patch
 
 # fix buffer overflow when scanning very long path for symlinks (CVE-2014-10072)
@@ -234,6 +234,9 @@ fi
 %doc Doc/*.html
 
 %changelog
+* Tue Aug 28 2018 Kamil Dudka <kdudka@redhat.com> - 4.3.11-9
+- yet another signal-handling related fix from upstream (#1622892)
+
 * Fri May 04 2018 Kamil Dudka <kdudka@redhat.com> - 4.3.11-8
 - fix defects detected by Coverity related to CVE-2017-18206 and CVE-2018-1083
 
