@@ -3,7 +3,7 @@
 Summary: A powerful interactive shell
 Name: zsh
 Version: 4.3.11
-Release: 4%{?dist}.2
+Release: 8%{?dist}
 License: BSD
 URL: http://zsh.sunsite.dk/
 Group: System Environment/Shells
@@ -49,6 +49,18 @@ Patch30: zsh-4.3.11-malloc-signal.patch
 
 # signal-handling related fixes collected from upstream (#1311166)
 Patch32: zsh-4.3.11-signal-handling.patch
+
+# fix buffer overflow when scanning very long path for symlinks (CVE-2014-10072)
+Patch34: zsh-5.0.2-CVE-2014-10072.patch
+
+# fix buffer overrun in xsymlinks (CVE-2017-18206)
+Patch36: zsh-5.0.2-CVE-2017-18206.patch
+
+# fix stack-based buffer overflow in gen_matches_files() (CVE-2018-1083)
+Patch39: zsh-5.0.2-CVE-2018-1083.patch
+
+# fix stack-based buffer overflow in utils.c:checkmailpath() (CVE-2018-1100)
+Patch40: zsh-5.0.2-CVE-2018-1100.patch
 
 # Prereq: fileutils grep /sbin/install-info
 Buildroot: %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
@@ -104,6 +116,10 @@ This package contains the Zsh manual in html format.
 %patch29 -p1
 %patch30 -p1
 %patch32 -p1
+%patch34 -p1
+%patch36 -p1
+%patch39 -p1
+%patch40 -p1
 
 cp -p %SOURCE7 .
 
@@ -218,10 +234,19 @@ fi
 %doc Doc/*.html
 
 %changelog
-* Tue Mar 01 2016 Kamil Dudka <kdudka@redhat.com> - 4.3.11-5.el6_7.2
-- signal-handling related fixes collected from upstream (#1316945)
+* Fri May 04 2018 Kamil Dudka <kdudka@redhat.com> - 4.3.11-8
+- fix defects detected by Coverity related to CVE-2017-18206 and CVE-2018-1083
 
-* Tue Oct 20 2015 Kamil Dudka <kdudka@redhat.com> - 4.3.11-4.el6_7.1
+* Thu May 03 2018 Kamil Dudka <kdudka@redhat.com> - 4.3.11-7
+- fix stack-based buffer overflow in utils.c:checkmailpath() (CVE-2018-1100)
+- fix stack-based buffer overflow in gen_matches_files() (CVE-2018-1083)
+- fix buffer overrun in xsymlinks (CVE-2017-18206)
+- fix buffer overflow when scanning very long path for symlinks (CVE-2014-10072)
+
+* Tue Mar 01 2016 Kamil Dudka <kdudka@redhat.com> - 4.3.11-6
+- signal-handling related fixes collected from upstream (#1311166)
+
+* Tue Oct 20 2015 Kamil Dudka <kdudka@redhat.com> - 4.3.11-5
 - fix malloc() signal leak in lexsave() (#1267903)
 
 * Mon May 18 2015 Kamil Dudka <kdudka@redhat.com> - 4.3.11-4
