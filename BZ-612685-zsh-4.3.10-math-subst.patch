@@ -1,0 +1,34 @@
+From 7dc37edec5dfccaabfd1b4bc7f54c2e8fa029b97 Mon Sep 17 00:00:00 2001
+From: Peter Stephenson <pws@users.sourceforge.net>
+Date: Mon, 28 Nov 2011 09:48:22 +0000
+Subject: [PATCH] =?UTF-8?q?Ismail=20D=C3=B6nmez:=2029920:=20NO=5FEXEC=20pr?=
+ =?UTF-8?q?oblem=20with=20arithmetic=20substitution?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Upstream-commit: 79dd64749622cd08c7087e8170906a030e350824
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/subst.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/Src/subst.c b/Src/subst.c
+index 24d515d..9023468 100644
+--- a/Src/subst.c
++++ b/Src/subst.c
+@@ -245,7 +245,10 @@ stringsubst(LinkList list, LinkNode node, int ssub, int asssub)
+ 	    if (endchar == Outpar && str2[1] == '(' && str[-2] == ')') {
+ 		/* Math substitution of the form $((...)) */
+ 		str[-2] = '\0';
+-		str = arithsubst(str2 + 2, &str3, str);
++		if (isset(EXECOPT))
++		    str = arithsubst(str2 + 2, &str3, str);
++		else
++		    strncpy(str3, str2, 1);
+ 		setdata(node, (void *) str3);
+ 		continue;
+ 	    }
+-- 
+2.1.0
+

@@ -1,0 +1,80 @@
+From cd0f8dbafc5799755ac4108f3258b5f1bd929c66 Mon Sep 17 00:00:00 2001
+From: Peter Stephenson <pws@users.sourceforge.net>
+Date: Thu, 6 Jan 2011 21:31:06 +0000
+Subject: [PATCH 1/2] unposted: fix argument type for write_loop()
+
+Upstream-commit: 6318e041d17a3dc82589cf324afa115b6c907dfe
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+
+Error: COMPILER_WARNING:
+zsh-4.3.11/Src/utils.c: scope_hint: In function 'getquery'
+zsh-4.3.11/Src/utils.c:2410: warning: passing argument 2 of 'write_loop' from incompatible pointer type
+zsh-4.3.11/Src/utils.c:2301: note: expected 'const char *' but argument is of type 'int *'
+---
+ Src/utils.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/Src/utils.c b/Src/utils.c
+index b64530b..786ea61 100644
+--- a/Src/utils.c
++++ b/Src/utils.c
+@@ -2406,8 +2406,10 @@ getquery(char *valid_chars, int purge)
+ 	}
+ 	zbeep();
+     }
+-    if (c >= 0)
+-	write_loop(SHTTY, &c, 1);
++    if (c >= 0) {
++	char buf = (char)c;
++	write_loop(SHTTY, &buf, 1);
++    }
+     if (nl)
+ 	write_loop(SHTTY, "\n", 1);
+ 
+-- 
+2.1.0
+
+
+From d604fdbc0ca1de5248663d43f6c8db2b05d330f9 Mon Sep 17 00:00:00 2001
+From: Mikael Magnusson <mikachu@gmail.com>
+Date: Tue, 6 Jan 2015 01:01:08 +0100
+Subject: [PATCH 2/2] 34118: Don't crash when writing out history if HOST is
+ unset
+
+Found by Coverity (Issue 1255793).
+
+Upstream-commit: 6b79f29fb230e839c97682f9c8648cac2762669e
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+
+Error: NULL_RETURNS (CWE-476):
+zsh-4.3.11/Src/hist.c:2737: returned_null: "getsparam" returns null (checked 42 out of 51 times).
+zsh-4.3.11/Src/params.c:2522:2: return_null: Explicitly returning null.
+zsh-4.3.11/Src/Modules/mathfunc.c:492: example_checked: Example 1: "getsparam(arg)" has its value checked in "seedstr = getsparam(arg)".
+zsh-4.3.11/Src/Modules/newuser.c:70: example_assign: Example 2: Assigning: "dotdir" = return value from "getsparam("ZDOTDIR")".
+zsh-4.3.11/Src/Modules/newuser.c:84: example_checked: Example 2 (cont.): "dotdir" has its value checked in "dotdir".
+zsh-4.3.11/Src/Modules/zftp.c:734: example_checked: Example 3: "getsparam("ZFTP_VERBOSE")" has its value checked in "verbose = getsparam("ZFTP_VERBOSE")".
+zsh-4.3.11/Src/Modules/zftp.c:1788: example_checked: Example 4: "getsparam("ZFTP_HOST")" has its value checked in "hname = getsparam("ZFTP_HOST")".
+zsh-4.3.11/Src/Modules/zutil.c:356: example_checked: Example 5: "getsparam("reply")" has its value checked in "str = getsparam("reply")".
+zsh-4.3.11/Src/hist.c:2737: dereference: Dereferencing a pointer that might be null "getsparam("HOST")" when calling "bicat".
+zsh-4.3.11/Src/string.c:132:5: deref_parm_in_call: Function "strlen" dereferences "s2".
+---
+ Src/hist.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/Src/hist.c b/Src/hist.c
+index c94d3e4..f3a23dc 100644
+--- a/Src/hist.c
++++ b/Src/hist.c
+@@ -2734,7 +2734,8 @@ lockhistfile(char *fn, int keep_trying)
+ #ifdef HAVE_LINK
+ # ifdef HAVE_SYMLINK
+ 	sprintf(pidbuf, "/pid-%ld/host-", (long)mypid);
+-	lnk = bicat(pidbuf, getsparam("HOST"));
++	lnk = getsparam("HOST");
++	lnk = bicat(pidbuf, lnk ? lnk : "");
+ 	/* We'll abuse fd as our success flag. */
+ 	while ((fd = symlink(lnk, lockfile)) < 0) {
+ 	    if (errno != EEXIST) {
+-- 
+2.1.0
+

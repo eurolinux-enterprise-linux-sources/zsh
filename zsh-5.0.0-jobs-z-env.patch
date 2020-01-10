@@ -1,0 +1,35 @@
+From afbf9a16bee55fb5a82ba82c888001d746673643 Mon Sep 17 00:00:00 2001
+From: Bart Schaefer <barts@users.sourceforge.net>
+Date: Sun, 18 Nov 2012 18:27:18 +0000
+Subject: [PATCH] users/17042: don't stomp the environment in "jobs -Z"
+
+... unless we've first copied it to new memory.
+
+Upstream-commit: daa9e1fd5427285974295fe91e9c747b5db97fb6
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/jobs.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/Src/jobs.c b/Src/jobs.c
+index df1787b..6eea365 100644
+--- a/Src/jobs.c
++++ b/Src/jobs.c
+@@ -1701,12 +1701,14 @@ init_jobs(char **argv, char **envp)
+ 	    goto done;
+ 	p = strchr(q, 0);
+     }
++#if !defined(HAVE_PUTENV) && !defined(USE_SET_UNSET_ENV)
+     for(; *envp; envp++) {
+ 	q = *envp;
+ 	if(q != p+1)
+ 	    goto done;
+ 	p = strchr(q, 0);
+     }
++#endif
+     done:
+     hackspace = p - hackzero;
+ #endif
+-- 
+2.1.0
+

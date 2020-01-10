@@ -1,0 +1,25 @@
+diff -ur zsh-4.3.10/Src/exec.c zsh-4.3.10-syntax/Src/exec.c
+--- zsh-4.3.10/Src/exec.c	2009-03-16 14:27:07.000000000 -0400
++++ zsh-4.3.10-syntax/Src/exec.c	2014-08-20 12:50:52.810874312 -0400
+@@ -982,6 +982,11 @@
+     Eprog prog;
+ 
+     pushheap();
++    if (isset(VERBOSE)) {
++       zputs(s, stderr);
++       fputc('\n', stderr);
++       fflush(stderr);
++    }
+     if ((prog = parse_string(s, 0)))
+ 	execode(prog, dont_change_job, exiting, context);
+     popheap();
+@@ -1042,6 +1047,9 @@
+     if (errflag)
+ 	return (lastval = 1);
+ 
++    if (!isset(EXECOPT))
++       return lastval = 0;
++
+     /* In evaluated traps, don't modify the line number. */
+     if (!IN_EVAL_TRAP() && !ineval && code)
+ 	lineno = code - 1;

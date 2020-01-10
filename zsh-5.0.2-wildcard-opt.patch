@@ -1,0 +1,52 @@
+From 941f312444dfda4d0d1d02edcfbae9dc1ec6b95e Mon Sep 17 00:00:00 2001
+From: Peter Stephenson <pws@zsh.org>
+Date: Mon, 8 Sep 2014 16:38:51 +0100
+Subject: [PATCH] users/19059 based on users/19058: remove ineffiency with
+ multiple * matches
+
+Upstream-commit: 8bf3595e3a05f0cea7f12c463a0df09e4010cd1c
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/pattern.c     | 10 ++++++++++
+ Test/D02glob.ztst |  7 +++++++
+ 2 files changed, 17 insertions(+)
+
+diff --git a/Src/pattern.c b/Src/pattern.c
+index 53ada0f..b74a08a 100644
+--- a/Src/pattern.c
++++ b/Src/pattern.c
+@@ -2911,6 +2911,16 @@ patmatch(Upat prog)
+ 	    break;
+ 	case P_STAR:
+ 	    /* Handle specially for speed, although really P_ONEHASH+P_ANY */
++	    while (P_OP(next) == P_STAR) {
++		/*
++		 * If there's another * following we can optimise it
++		 * out.  Chains of *'s can give pathologically bad
++		 * performance.
++		 */
++		scan = next;
++		next = PATNEXT(scan);
++	    }
++	    /*FALLTHROUGH*/
+ 	case P_ONEHASH:
+ 	case P_TWOHASH:
+ 	    /*
+diff --git a/Test/D02glob.ztst b/Test/D02glob.ztst
+index 0aea261..5709e5c 100644
+--- a/Test/D02glob.ztst
++++ b/Test/D02glob.ztst
+@@ -433,3 +433,10 @@
+  print glob.tmp/dir5/N<->(N)
+ 0:Numeric glob is not usurped by process substitution.
+ >glob.tmp/dir5/N123
++
++# The following should not cause excessive slowdown.
++  print glob.tmp/*.*
++  print glob.tmp/**************************.*************************
++0:Optimisation to squeeze multiple *'s used as ordinary glob wildcards.
++>glob.tmp/ra=1.0_et=3.5
++>glob.tmp/ra=1.0_et=3.5
+-- 
+2.1.0
+

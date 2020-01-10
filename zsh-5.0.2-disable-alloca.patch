@@ -1,0 +1,53 @@
+From d2f33b7005540aef5ce79479d598cdcc10d397f9 Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Thu, 24 Jul 2014 08:45:16 -0700
+Subject: [PATCH] 32853: redefine VARARR() to use heap rather than stack
+ allocation
+
+Upstream-commit: 2f0efe9f592255d0d83c0929423cc397bb1ebfa4
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/mem.c    | 5 ++++-
+ Src/system.h | 5 +++++
+ 2 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/Src/mem.c b/Src/mem.c
+index 5275c6c..c4745a5 100644
+--- a/Src/mem.c
++++ b/Src/mem.c
+@@ -637,7 +637,10 @@ zrealloc(void *ptr, size_t size)
+ 	ptr = NULL;
+     } else {
+ 	/* If ptr is NULL, then behave like malloc */
+-	ptr = malloc(size);
++	if (!(ptr = (void *) malloc(size))) {
++	    zerr("fatal error: out of memory");
++	    exit(1);
++	}
+     }
+     unqueue_signals();
+ 
+diff --git a/Src/system.h b/Src/system.h
+index 1a96fdf..6913fac 100644
+--- a/Src/system.h
++++ b/Src/system.h
+@@ -283,11 +283,16 @@ struct timezone {
+ # include <limits.h>
+ #endif
+ 
++#ifdef USE_STACK_ALLOCATION
++#warning compiling with USE_STACK_ALLOCATION
+ #ifdef HAVE_VARIABLE_LENGTH_ARRAYS
+ # define VARARR(X,Y,Z)	X (Y)[Z]
+ #else
+ # define VARARR(X,Y,Z)	X *(Y) = (X *) alloca(sizeof(X) * (Z))
+ #endif
++#else
++# define VARARR(X,Y,Z)	X *(Y) = (X *) zhalloc(sizeof(X) * (Z))
++#endif
+ 
+ /* we should handle unlimited sizes from pathconf(_PC_PATH_MAX) */
+ /* but this is too much trouble                                 */
+-- 
+2.1.0
+

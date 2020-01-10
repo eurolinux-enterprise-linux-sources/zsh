@@ -1,0 +1,55 @@
+From d379782a50437c9a49d48adca163621f9f67aed1 Mon Sep 17 00:00:00 2001
+From: Jan Chaloupka <jchaloup@redhat.com>
+Date: Mon, 2 Jun 2014 17:06:32 +0200
+Subject: [PATCH] 32666: shell emulation doc addition
+
+Upstream-commit: d6698d89a6ff9e644ee608c1d08ff21911f9fb27
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Doc/Zsh/compat.yo | 2 +-
+ Doc/zsh.1         | 2 +-
+ Doc/zshall.1      | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/Doc/Zsh/compat.yo b/Doc/Zsh/compat.yo
+index bf97fe2..f1be15f 100644
+--- a/Doc/Zsh/compat.yo
++++ b/Doc/Zsh/compat.yo
+@@ -6,7 +6,7 @@ cindex(ksh compatibility)
+ Zsh tries to emulate bf(sh) or bf(ksh) when it is invoked as
+ tt(sh) or tt(ksh) respectively; more precisely, it looks at the first
+ letter of the name by which it was invoked, excluding any initial `tt(r)'
+-(assumed to stand for `restricted'), and if that is `tt(s)' or `tt(k)' it
++(assumed to stand for `restricted'), and if that is `tt(b)', `tt(s)' or `tt(k)' it
+ will emulate bf(sh) or bf(ksh).  Furthermore, if invoked as tt(su) (which
+ happens on certain systems when the shell is executed by the tt(su)
+ command), the shell will try to find an alternative name from the tt(SHELL)
+diff --git a/Doc/zsh.1 b/Doc/zsh.1
+index 3ba42a6..8143d16 100644
+--- a/Doc/zsh.1
++++ b/Doc/zsh.1
+@@ -325,7 +325,7 @@ can be stacked after the `\fB\-b\fP\&' and will take effect as normal\&.
+ Zsh tries to emulate \fBsh\fP or \fBksh\fP when it is invoked as
+ \fBsh\fP or \fBksh\fP respectively; more precisely, it looks at the first
+ letter of the name by which it was invoked, excluding any initial `\fBr\fP\&'
+-(assumed to stand for `restricted\&'), and if that is `\fBs\fP' or `\fBk\fP' it
++(assumed to stand for `restricted\&'), and if that is `\fBb\fP', `\fBs\fP' or `\fBk\fP' it
+ will emulate \fBsh\fP or \fBksh\fP\&.  Furthermore, if invoked as \fBsu\fP (which
+ happens on certain systems when the shell is executed by the \fBsu\fP
+ command), the shell will try to find an alternative name from the \fBSHELL\fP
+diff --git a/Doc/zshall.1 b/Doc/zshall.1
+index 9642c5c..e23492a 100644
+--- a/Doc/zshall.1
++++ b/Doc/zshall.1
+@@ -322,7 +322,7 @@ can be stacked after the `\fB\-b\fP' and will take effect as normal\&.
+ Zsh tries to emulate \fBsh\fP or \fBksh\fP when it is invoked as
+ \fBsh\fP or \fBksh\fP respectively; more precisely, it looks at the first
+ letter of the name by which it was invoked, excluding any initial `\fBr\fP'
+-(assumed to stand for `restricted'), and if that is `\fBs\fP' or `\fBk\fP' it
++(assumed to stand for `restricted'), and if that is `\fBb\fP', `\fBs\fP' or `\fBk\fP' it
+ will emulate \fBsh\fP or \fBksh\fP\&.  Furthermore, if invoked as \fBsu\fP (which
+ happens on certain systems when the shell is executed by the \fBsu\fP
+ command), the shell will try to find an alternative name from the \fBSHELL\fP
+-- 
+2.1.0
+
