@@ -1,0 +1,398 @@
+From 2354fb8f1f8f7a555ac12a4b3253574293e8758e Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Sun, 9 Aug 2015 00:50:36 -0700
+Subject: [PATCH 1/3] 36022 fix bug that some loop constructs could not be
+ interrupted, revise signal queueing
+
+There are two underlying ideas here:  (1) Keeping signals queued around
+anything that's doing memory management (including push/pop of the heap)
+has become crucial.  (2) Anytime the shell is going to run a command, be
+it buitin or external, it must be both safe and necessary to process any
+queued signals, so that the apparent order of signal arrival and command
+execution is preserved.
+
+Upstream-commit: 9958684574bf8b0ecec6983cca57f3fa3dd7cd63
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/exec.c    | 18 ++++++++++++++++++
+ Src/init.c    |  5 +++++
+ Src/input.c   |  9 +++++++++
+ Src/parse.c   |  8 ++++++++
+ Src/signals.c | 10 ++++++++++
+ 5 files changed, 50 insertions(+)
+
+diff --git a/Src/exec.c b/Src/exec.c
+index da89713..4b22356 100644
+--- a/Src/exec.c
++++ b/Src/exec.c
+@@ -4395,6 +4395,8 @@ doshfunc(Shfunc shfunc, LinkList doshargs, int noreturnval)
+     static int funcdepth;
+ #endif
+ 
++    queue_signals();	/* Lots of memory and global state changes coming */
++
+     pushheap();
+ 
+     oargv0 = NULL;
+@@ -4502,7 +4504,9 @@ doshfunc(Shfunc shfunc, LinkList doshargs, int noreturnval)
+ 
+ 	prog->flags &= ~EF_RUN;
+ 
++	unqueue_signals();
+ 	runshfunc(prog, NULL, fstack.name);
++	queue_signals();
+ 
+ 	if (!(shf = (Shfunc) shfunctab->getnode(shfunctab,
+ 						(name = fname)))) {
+@@ -4515,7 +4519,11 @@ doshfunc(Shfunc shfunc, LinkList doshargs, int noreturnval)
+ 	}
+ 	prog = shf->funcdef;
+     }
++
++    unqueue_signals();
+     runshfunc(prog, wrappers, fstack.name);
++    queue_signals();
++
+  doneshfunc:
+     funcstack = fstack.prev;
+ #ifdef MAX_FUNCTION_DEPTH
+@@ -4570,6 +4578,8 @@ doshfunc(Shfunc shfunc, LinkList doshargs, int noreturnval)
+     }
+     popheap();
+ 
++    unqueue_signals();
++
+     if (exit_pending) {
+ 	if (locallevel > forklevel) {
+ 	    /* Still functions to return: force them to do so. */
+@@ -4600,6 +4610,8 @@ runshfunc(Eprog prog, FuncWrap wrap, char *name)
+     int cont, ouu;
+     char *ou;
+ 
++    queue_signals();
++
+     ou = zalloc(ouu = underscoreused);
+     if (ou)
+ 	memcpy(ou, zunderscore, underscoreused);
+@@ -4621,12 +4633,18 @@ runshfunc(Eprog prog, FuncWrap wrap, char *name)
+ 	wrap = wrap->next;
+     }
+     startparamscope();
++
++    unqueue_signals();
+     execode(prog, 1, 0, "shfunc");
++    queue_signals();
++
+     if (ou) {
+ 	setunderscore(ou);
+ 	zfree(ou, ouu);
+     }
+     endparamscope();
++
++    unqueue_signals();
+ }
+ 
+ /* Search fpath for an undefined function.  Finds the file, and returns the *
+diff --git a/Src/init.c b/Src/init.c
+index 21ba8f2..57334b7 100644
+--- a/Src/init.c
++++ b/Src/init.c
+@@ -105,6 +105,7 @@ loop(int toplevel, int justonce)
+     Eprog prog;
+     int err, non_empty = 0;
+ 
++    queue_signals();
+     pushheap();
+     if (!toplevel)
+ 	lexsave();
+@@ -118,7 +119,9 @@ loop(int toplevel, int justonce)
+ 	    if (interact && toplevel) {
+ 	        int hstop = stophist;
+ 		stophist = 3;
++		unqueue_signals();
+ 		preprompt();
++		queue_signals();
+ 		if (stophist != 3)
+ 		    hbegin(1);
+ 		else
+@@ -196,6 +199,7 @@ loop(int toplevel, int justonce)
+ 	if (((!interact || sourcelevel) && errflag) || retflag)
+ 	    break;
+ 	if (isset(SINGLECOMMAND) && toplevel) {
++	    dont_queue_signals();
+ 	    if (sigtrapped[SIGEXIT])
+ 		dotrap(SIGEXIT);
+ 	    exit(lastval);
+@@ -207,6 +211,7 @@ loop(int toplevel, int justonce)
+     if (!toplevel)
+ 	lexrestore();
+     popheap();
++    unqueue_signals();
+ 
+     if (err)
+ 	return LOOP_ERROR;
+diff --git a/Src/input.c b/Src/input.c
+index 5cff22d..65abf87 100644
+--- a/Src/input.c
++++ b/Src/input.c
+@@ -140,14 +140,17 @@ shingetline(void)
+     int c;
+     char buf[BUFSIZ];
+     char *p;
++    int q = queue_signal_level();
+ 
+     p = buf;
+     for (;;) {
++	dont_queue_signals();
+ 	do {
+ 	    errno = 0;
+ 	    c = fgetc(bshin);
+ 	} while (c < 0 && errno == EINTR);
+ 	if (c < 0 || c == '\n') {
++	    restore_queue_signals(q);
+ 	    if (c == '\n')
+ 		*p++ = '\n';
+ 	    if (p > buf) {
+@@ -163,11 +166,13 @@ shingetline(void)
+ 	} else
+ 	    *p++ = c;
+ 	if (p >= buf + BUFSIZ - 1) {
++	    queue_signals();
+ 	    line = zrealloc(line, ll + (p - buf) + 1);
+ 	    memcpy(line + ll, buf, p - buf);
+ 	    ll += p - buf;
+ 	    line[ll] = '\0';
+ 	    p = buf;
++	    unqueue_signals();
+ 	}
+     }
+ }
+@@ -338,6 +343,8 @@ inputline(void)
+ static void
+ inputsetline(char *str, int flags)
+ {
++    queue_signals();
++
+     if ((inbufflags & INP_FREE) && inbuf) {
+ 	free(inbuf);
+     }
+@@ -355,6 +362,8 @@ inputsetline(char *str, int flags)
+     else
+ 	inbufct = inbufleft;
+     inbufflags = flags;
++
++    unqueue_signals();
+ }
+ 
+ /*
+diff --git a/Src/parse.c b/Src/parse.c
+index e59a882..5f30c1a 100644
+--- a/Src/parse.c
++++ b/Src/parse.c
+@@ -363,6 +363,8 @@ ecstrcode(char *s)
+ static void
+ init_parse(void)
+ {
++    queue_signals();
++
+     if (ecbuf) zfree(ecbuf, eclen);
+ 
+     ecbuf = (Wordcode) zalloc((eclen = EC_INIT_SIZE) * sizeof(wordcode));
+@@ -371,6 +373,8 @@ init_parse(void)
+     ecsoffs = ecnpats = 0;
+     ecssub = 0;
+     ecnfunc = 0;
++
++    unqueue_signals();
+ }
+ 
+ /* Build eprog. */
+@@ -391,6 +395,8 @@ bld_eprog(void)
+     Eprog ret;
+     int l;
+ 
++    queue_signals();
++
+     ecadd(WCB_END());
+ 
+     ret = (Eprog) zhalloc(sizeof(*ret));
+@@ -413,6 +419,8 @@ bld_eprog(void)
+     zfree(ecbuf, eclen);
+     ecbuf = NULL;
+ 
++    unqueue_signals();
++
+     return ret;
+ }
+ 
+diff --git a/Src/signals.c b/Src/signals.c
+index 456a853..d50b819 100644
+--- a/Src/signals.c
++++ b/Src/signals.c
+@@ -1175,6 +1175,8 @@ dotrapargs(int sig, int *sigtr, void *sigfn)
+ 	}
+     }
+ 
++    queue_signals();	/* Any time we manage memory or global state */
++
+     intrap++;
+     *sigtr |= ZSIG_IGNORED;
+ 
+@@ -1211,7 +1213,11 @@ dotrapargs(int sig, int *sigtr, void *sigfn)
+ 	trapisfunc = isfunc = 1;
+ 
+ 	sfcontext = SFC_SIGNAL;
++
++	unqueue_signals();
+ 	doshfunc((Shfunc)sigfn, args, 1);
++	queue_signals();
++
+ 	sfcontext = osc;
+ 	freelinklist(args, (FreeFunc) NULL);
+ 	zsfree(name);
+@@ -1220,7 +1226,9 @@ dotrapargs(int sig, int *sigtr, void *sigfn)
+ 	trap_state = TRAP_STATE_PRIMED;
+ 	trapisfunc = isfunc = 0;
+ 
++	unqueue_signals();
+ 	execode((Eprog)sigfn, 1, 0, "trap");
++	queue_signals();
+     }
+     runhookdef(AFTERTRAPHOOK, NULL);
+ 
+@@ -1265,6 +1273,8 @@ dotrapargs(int sig, int *sigtr, void *sigfn)
+     if (*sigtr != ZSIG_IGNORED)
+ 	*sigtr &= ~ZSIG_IGNORED;
+     intrap--;
++
++    unqueue_signals();
+ }
+ 
+ /* Standard call to execute a trap for a given signal. */
+-- 
+2.5.0
+
+
+From 50e5b653062301f07b082f0dd06727410ce9e287 Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Sun, 9 Aug 2015 17:37:23 -0700
+Subject: [PATCH 2/3] 36033: a few more queue_signals() to protect global state
+ changes
+
+Upstream-commit: df5f825538720a9422859200d58d075d1dd075fc
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/glob.c    | 4 ++++
+ Src/pattern.c | 8 +++++++-
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/Src/glob.c b/Src/glob.c
+index 5f68135..a362198 100644
+--- a/Src/glob.c
++++ b/Src/glob.c
+@@ -213,22 +213,26 @@ static struct globdata curglobdata;
+ 
+ #define save_globstate(N) \
+   do { \
++    queue_signals(); \
+     memcpy(&(N), &curglobdata, sizeof(struct globdata)); \
+     (N).gd_pathpos = pathpos; \
+     (N).gd_pathbuf = pathbuf; \
+     (N).gd_glob_pre = glob_pre; \
+     (N).gd_glob_suf = glob_suf; \
+     pathbuf = NULL; \
++    unqueue_signals(); \
+   } while (0)
+ 
+ #define restore_globstate(N) \
+   do { \
++    queue_signals(); \
+     zfree(pathbuf, pathbufsz); \
+     memcpy(&curglobdata, &(N), sizeof(struct globdata)); \
+     pathpos = (N).gd_pathpos; \
+     pathbuf = (N).gd_pathbuf; \
+     glob_pre = (N).gd_glob_pre; \
+     glob_suf = (N).gd_glob_suf; \
++    unqueue_signals(); \
+   } while (0)
+ 
+ /* pathname component in filename patterns */
+diff --git a/Src/pattern.c b/Src/pattern.c
+index b74a08a..52774c0 100644
+--- a/Src/pattern.c
++++ b/Src/pattern.c
+@@ -452,6 +452,8 @@ patcompile(char *exp, int inflags, char **endexp)
+     char *lng, *strp = NULL;
+     Patprog p;
+ 
++    queue_signals();
++
+     startoff = sizeof(struct patprog);
+     /* Ensure alignment of start of program string */
+     startoff = (startoff + sizeof(union upat) - 1) & ~(sizeof(union upat) - 1);
+@@ -521,8 +523,10 @@ patcompile(char *exp, int inflags, char **endexp)
+ 	if (!strp || (*strp && *strp != '/')) {
+ 	    /* No, do normal compilation. */
+ 	    strp = NULL;
+-	    if (patcompswitch(0, &flags) == 0)
++	    if (patcompswitch(0, &flags) == 0) {
++		unqueue_signals();
+ 		return NULL;
++	    }
+ 	} else {
+ 	    /*
+ 	     * Yes, copy the string, and skip compilation altogether.
+@@ -654,6 +658,8 @@ patcompile(char *exp, int inflags, char **endexp)
+ 
+     if (endexp)
+ 	*endexp = patparse;
++
++    unqueue_signals();
+     return p;
+ }
+ 
+-- 
+2.5.0
+
+
+From 9d434be8c96dde592636a46492449e44148d26d4 Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Mon, 10 Aug 2015 12:54:05 -0700
+Subject: [PATCH 3/3] 36079: do not allow update_job() and its helpers to run
+ the signal queue while we are processing a job exit.
+
+Upstream-commit: 93ca77f8f73bc58041bcbf8e4319b056504806e5
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/signals.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/Src/signals.c b/Src/signals.c
+index d50b819..99b9a62 100644
+--- a/Src/signals.c
++++ b/Src/signals.c
+@@ -485,6 +485,12 @@ wait_for_processes(void)
+ 	    break;
+ 	}
+ 
++	/* This is necessary to be sure queueing_enabled > 0 when
++	 * we enter printjob() from update_job(), so that we don't
++	 * decrement to zero in should_report_time() and improperly
++	 * run other handlers in the middle of processing this one */
++	queue_signals();
++
+ 	/*
+ 	 * Find the process and job containing this pid and
+ 	 * update it.
+@@ -520,6 +526,8 @@ wait_for_processes(void)
+ 	 */
+ 	if (pn != NULL && pid == lastpid && lastpid_status != -1L)
+ 	    lastpid_status = lastval2;
++
++	unqueue_signals();
+     }
+ }
+ 
+-- 
+2.5.0
+
