@@ -3,7 +3,7 @@
 Summary: A powerful interactive shell
 Name: zsh
 Version: 4.3.11
-Release: 4%{?dist}
+Release: 4%{?dist}.1
 License: BSD
 URL: http://zsh.sunsite.dk/
 Group: System Environment/Shells
@@ -43,6 +43,9 @@ Patch28: zsh-5.0.2-emul-man-page.patch
 
 # fix defects found by GCC and Coverity Analysis (#1181608)
 Patch29: zsh-4.3.11-coverity.patch
+
+# fix malloc() signal leak in lexsave() (#1267903)
+Patch30: zsh-4.3.11-malloc-signal.patch
 
 # Prereq: fileutils grep /sbin/install-info
 Buildroot: %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
@@ -96,6 +99,7 @@ This package contains the Zsh manual in html format.
 %patch27 -p1
 %patch28 -p1
 %patch29 -p1
+%patch30 -p1
 
 cp -p %SOURCE7 .
 
@@ -210,6 +214,9 @@ fi
 %doc Doc/*.html
 
 %changelog
+* Tue Oct 20 2015 Kamil Dudka <kdudka@redhat.com> - 4.3.11-4.el6_7.1
+- fix malloc() signal leak in lexsave() (#1267903)
+
 * Mon May 18 2015 Kamil Dudka <kdudka@redhat.com> - 4.3.11-4
 - signal safety when updating global state (#978613)
 
