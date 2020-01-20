@@ -1,0 +1,406 @@
+From a361a5ac293c9422f953c3d59e53f07e195740d3 Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Thu, 6 Nov 2014 10:50:20 -0800
+Subject: [PATCH 1/5] 33614 (based on RedHat BZ-978613): signal safety when
+ updating global state in execshfunc()
+
+Upstream-commit: 7abd611a2396bad9d93d18681a2c59cb1ea0e158
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/exec.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/Src/exec.c b/Src/exec.c
+index 28da5c3..60ee4b8 100644
+--- a/Src/exec.c
++++ b/Src/exec.c
+@@ -4392,6 +4392,7 @@ execshfunc(Shfunc shf, LinkList args)
+ 	fputc('\n', xtrerr);
+ 	fflush(xtrerr);
+     }
++    queue_signals();
+     ocs = cmdstack;
+     ocsp = cmdsp;
+     cmdstack = (unsigned char *) zalloc(CMDSTACKSZ);
+@@ -4399,7 +4400,11 @@ execshfunc(Shfunc shf, LinkList args)
+     if ((osfc = sfcontext) == SFC_NONE)
+ 	sfcontext = SFC_DIRECT;
+     xtrerr = stderr;
++    unqueue_signals();
++
+     doshfunc(shf, args, 0);
++
++    queue_signals();
+     sfcontext = osfc;
+     free(cmdstack);
+     cmdstack = ocs;
+@@ -4407,6 +4412,7 @@ execshfunc(Shfunc shf, LinkList args)
+ 
+     if (!list_pipe)
+ 	deletefilelist(last_file_list, 0);
++    unqueue_signals();
+ }
+ 
+ /* Function to execute the special type of command that represents an *
+-- 
+2.4.0
+
+
+From 236bb914d24e6588d12c3bf66bd06c6416832b8f Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Fri, 20 Feb 2015 18:45:36 -0800
+Subject: [PATCH 2/5] 34590: queue_signals() around more scopes that manipulate
+ global state
+
+Upstream-commit: a4ff8e69570cbdb8e7d5bf1d5cc4000ffe63e15e
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/exec.c |  4 +++-
+ Src/text.c | 15 +++++++++++++++
+ 2 files changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/Src/exec.c b/Src/exec.c
+index 60ee4b8..83b9083 100644
+--- a/Src/exec.c
++++ b/Src/exec.c
+@@ -2280,6 +2280,7 @@ addvars(Estate state, Wordcode pc, int addflags)
+ void
+ setunderscore(char *str)
+ {
++    queue_signals();
+     if (str && *str) {
+ 	int l = strlen(str) + 1, nl = (l + 31) & ~31;
+ 
+@@ -2297,6 +2298,7 @@ setunderscore(char *str)
+ 	*zunderscore = '\0';
+ 	underscoreused = 1;
+     }
++    unqueue_signals();
+ }
+ 
+ /* These describe the type of expansions that need to be done on the words
+@@ -5056,7 +5058,7 @@ execsave(void)
+ {
+     struct execstack *es;
+ 
+-    es = (struct execstack *) malloc(sizeof(struct execstack));
++    es = (struct execstack *) zalloc(sizeof(struct execstack));
+     es->list_pipe_pid = list_pipe_pid;
+     es->nowait = nowait;
+     es->pline_level = pline_level;
+diff --git a/Src/text.c b/Src/text.c
+index f55553e..8f8eb34 100644
+--- a/Src/text.c
++++ b/Src/text.c
+@@ -173,6 +173,8 @@ getpermtext(Eprog prog, Wordcode c, int start_indent)
+ {
+     struct estate s;
+ 
++    queue_signals();
++
+     if (!c)
+ 	c = prog->prog;
+ 
+@@ -193,6 +195,9 @@ getpermtext(Eprog prog, Wordcode c, int start_indent)
+     *tptr = '\0';
+     freeeprog(prog);		/* mark as unused */
+     untokenize(tbuf);
++
++    unqueue_signals();
++
+     return tbuf;
+ }
+ 
+@@ -206,6 +211,8 @@ getjobtext(Eprog prog, Wordcode c)
+ 
+     struct estate s;
+ 
++    queue_signals();
++
+     if (!c)
+ 	c = prog->prog;
+ 
+@@ -224,6 +231,9 @@ getjobtext(Eprog prog, Wordcode c)
+     *tptr = '\0';
+     freeeprog(prog);		/* mark as unused */
+     untokenize(jbuf);
++
++    unqueue_signals();
++
+     return jbuf;
+ }
+ 
+@@ -879,6 +889,9 @@ getredirs(LinkList redirs)
+ 	">", ">|", ">>", ">>|", "&>", "&>|", "&>>", "&>>|", "<>", "<",
+ 	"<<", "<<-", "<<<", "<&", ">&", NULL /* >&- */, "<", ">"
+     };
++
++    queue_signals();
++
+     taddchr(' ');
+     for (n = firstnode(redirs); n; incnode(n)) {
+ 	Redir f = (Redir) getdata(n);
+@@ -966,4 +979,6 @@ getredirs(LinkList redirs)
+ 	}
+     }
+     tptr--;
++
++    unqueue_signals();
+ }
+-- 
+2.4.0
+
+
+From 2e60901b1733929619cccce6cd66898520fd3015 Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Thu, 26 Sep 2013 21:27:27 -0700
+Subject: [PATCH 3/5] 31772: queue_signals() to prevent re-entry into
+ endparamscope().
+
+Upstream-commit: ae92cadc75fbf7e8ec356cf09d3f73db9868424b
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/params.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/Src/params.c b/Src/params.c
+index 8649178..d6711e4 100644
+--- a/Src/params.c
++++ b/Src/params.c
+@@ -4667,10 +4667,12 @@ startparamscope(void)
+ mod_export void
+ endparamscope(void)
+ {
++    queue_signals();
+     locallevel--;
+     /* This pops anything from a higher locallevel */
+     saveandpophiststack(0, HFILE_USE_OPTIONS);
+     scanhashtable(paramtab, 0, 0, 0, scanendscope, 0);
++    unqueue_signals();
+ }
+ 
+ /**/
+-- 
+2.4.1
+
+
+From 39dea2e735ae277c9e1238e5d17f3fbd0a08bb6f Mon Sep 17 00:00:00 2001
+From: Bart Schaefer <schaefer@zsh.org>
+Date: Thu, 17 Oct 2013 07:35:05 -0700
+Subject: [PATCH 4/5] 31832: make execrestore() more signal-safe.
+
+Upstream-commit: 978b5bcc8d21fce58369f810ef73bdbc434f33e7
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/exec.c | 52 ++++++++++++++++++++++++++++------------------------
+ 1 file changed, 28 insertions(+), 24 deletions(-)
+
+diff --git a/Src/exec.c b/Src/exec.c
+index 83b9083..2f94052 100644
+--- a/Src/exec.c
++++ b/Src/exec.c
+@@ -5087,30 +5087,34 @@ execsave(void)
+ void
+ execrestore(void)
+ {
+-    struct execstack *en;
++    struct execstack *en = exstack;
+ 
+     DPUTS(!exstack, "BUG: execrestore() without execsave()");
+-    list_pipe_pid = exstack->list_pipe_pid;
+-    nowait = exstack->nowait;
+-    pline_level = exstack->pline_level;
+-    list_pipe_child = exstack->list_pipe_child;
+-    list_pipe_job = exstack->list_pipe_job;
+-    strcpy(list_pipe_text, exstack->list_pipe_text);
+-    lastval = exstack->lastval;
+-    noeval = exstack->noeval;
+-    badcshglob = exstack->badcshglob;
+-    cmdoutpid = exstack->cmdoutpid;
+-    cmdoutval = exstack->cmdoutval;
+-    use_cmdoutval = exstack->use_cmdoutval;
+-    trap_return = exstack->trap_return;
+-    trap_state = exstack->trap_state;
+-    trapisfunc = exstack->trapisfunc;
+-    traplocallevel = exstack->traplocallevel;
+-    noerrs = exstack->noerrs;
+-    subsh_close = exstack->subsh_close;
+-    setunderscore(exstack->underscore);
+-    zsfree(exstack->underscore);
+-    en = exstack->next;
+-    free(exstack);
+-    exstack = en;
++
++    queue_signals();
++    exstack = exstack->next;
++
++    list_pipe_pid = en->list_pipe_pid;
++    nowait = en->nowait;
++    pline_level = en->pline_level;
++    list_pipe_child = en->list_pipe_child;
++    list_pipe_job = en->list_pipe_job;
++    strcpy(list_pipe_text, en->list_pipe_text);
++    lastval = en->lastval;
++    noeval = en->noeval;
++    badcshglob = en->badcshglob;
++    cmdoutpid = en->cmdoutpid;
++    cmdoutval = en->cmdoutval;
++    use_cmdoutval = en->use_cmdoutval;
++    trap_return = en->trap_return;
++    trap_state = en->trap_state;
++    trapisfunc = en->trapisfunc;
++    traplocallevel = en->traplocallevel;
++    noerrs = en->noerrs;
++    subsh_close = en->subsh_close;
++    setunderscore(en->underscore);
++    zsfree(en->underscore);
++    free(en);
++
++    unqueue_signals();
+ }
+-- 
+2.4.1
+
+
+From 15ac5a43bb483ed753655c7985fbdb056745303b Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Tue, 30 Sep 2014 20:34:58 -0700
+Subject: [PATCH 5/5] 33298: make lexrestore() more signal-safe
+
+Upstream-commit: 8727049674b1f39a8926c02dc74e9f19bbd70289
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/lex.c | 110 ++++++++++++++++++++++++++++++++------------------------------
+ 1 file changed, 57 insertions(+), 53 deletions(-)
+
+diff --git a/Src/lex.c b/Src/lex.c
+index ac87e5e..82bf848 100644
+--- a/Src/lex.c
++++ b/Src/lex.c
+@@ -323,66 +323,70 @@ lexsave(void)
+ mod_export void
+ lexrestore(void)
+ {
+-    struct lexstack *ln;
++    struct lexstack *ln = lstack;
+ 
+     DPUTS(!lstack, "BUG: lexrestore() without lexsave()");
+-    incmdpos = lstack->incmdpos;
+-    incond = lstack->incond;
+-    incasepat = lstack->incasepat;
+-    dbparens = lstack->dbparens;
+-    isfirstln = lstack->isfirstln;
+-    isfirstch = lstack->isfirstch;
+-    histactive = lstack->histactive;
+-    histdone = lstack->histdone;
+-    lexflags = lstack->lexflags;
+-    stophist = lstack->stophist;
+-    chline = lstack->hline;
+-    hptr = lstack->hptr;
++
++    queue_signals();
++    lstack = lstack->next;
++
++    if (!lstack) {
++	/* Back to top level: don't need special ZLE value */
++	DPUTS(ln->hline != zle_chline, "BUG: Ouch, wrong chline for ZLE");
++	zle_chline = NULL;
++    }
++
++    incmdpos = ln->incmdpos;
++    incond = ln->incond;
++    incasepat = ln->incasepat;
++    dbparens = ln->dbparens;
++    isfirstln = ln->isfirstln;
++    isfirstch = ln->isfirstch;
++    histactive = ln->histactive;
++    histdone = ln->histdone;
++    lexflags = ln->lexflags;
++    stophist = ln->stophist;
++    chline = ln->hline;
++    hptr = ln->hptr;
+     if (cmdstack)
+-	free(cmdstack);
+-    cmdstack = lstack->cstack;
+-    cmdsp = lstack->csp;
+-    tok = lstack->tok;
+-    isnewlin = lstack->isnewlin;
+-    tokstr = lstack->tokstr;
+-    zshlextext = lstack->zshlextext;
+-    bptr = lstack->bptr;
+-    bsiz = lstack->bsiz;
+-    len = lstack->len;
+-    chwords = lstack->chwords;
+-    chwordlen = lstack->chwordlen;
+-    chwordpos = lstack->chwordpos;
+-    hwgetword = lstack->hwgetword;
+-    lexstop = lstack->lexstop;
+-    hdocs = lstack->hdocs;
+-    hgetc = lstack->hgetc;
+-    hungetc = lstack->hungetc;
+-    hwaddc = lstack->hwaddc;
+-    hwbegin = lstack->hwbegin;
+-    hwend = lstack->hwend;
+-    addtoline = lstack->addtoline;
++	zfree(cmdstack, CMDSTACKSZ);
++    cmdstack = ln->cstack;
++    cmdsp = ln->csp;
++    tok = ln->tok;
++    isnewlin = ln->isnewlin;
++    tokstr = ln->tokstr;
++    zshlextext = ln->zshlextext;
++    bptr = ln->bptr;
++    bsiz = ln->bsiz;
++    len = ln->len;
++    chwords = ln->chwords;
++    chwordlen = ln->chwordlen;
++    chwordpos = ln->chwordpos;
++    hwgetword = ln->hwgetword;
++    lexstop = ln->lexstop;
++    hdocs = ln->hdocs;
++    hgetc = ln->hgetc;
++    hungetc = ln->hungetc;
++    hwaddc = ln->hwaddc;
++    hwbegin = ln->hwbegin;
++    hwend = ln->hwend;
++    addtoline = ln->addtoline;
+     if (ecbuf)
+ 	zfree(ecbuf, eclen);
+-    eclen = lstack->eclen;
+-    ecused = lstack->ecused;
+-    ecnpats = lstack->ecnpats;
+-    ecbuf = lstack->ecbuf;
+-    ecstrs = lstack->ecstrs;
+-    ecsoffs = lstack->ecsoffs;
+-    ecssub = lstack->ecssub;
+-    ecnfunc = lstack->ecnfunc;
+-    hlinesz = lstack->hlinesz;
+-    toklineno = lstack->toklineno;
++    eclen = ln->eclen;
++    ecused = ln->ecused;
++    ecnpats = ln->ecnpats;
++    ecbuf = ln->ecbuf;
++    ecstrs = ln->ecstrs;
++    ecsoffs = ln->ecsoffs;
++    ecssub = ln->ecssub;
++    ecnfunc = ln->ecnfunc;
++    hlinesz = ln->hlinesz;
++    toklineno = ln->toklineno;
+     errflag = 0;
++    free(ln);
+ 
+-    ln = lstack->next;
+-    if (!ln) {
+-	/* Back to top level: don't need special ZLE value */
+-	DPUTS(chline != zle_chline, "BUG: Ouch, wrong chline for ZLE");
+-	zle_chline = NULL;
+-    }
+-    free(lstack);
+-    lstack = ln;
++    unqueue_signals();
+ }
+ 
+ /**/
+-- 
+2.4.1
+

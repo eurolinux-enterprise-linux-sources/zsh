@@ -1,0 +1,70 @@
+From 160c02c8071b8948231a229ec6247cf0792c389a Mon Sep 17 00:00:00 2001
+From: Filip Krska <fkrska@redhat.com>
+Date: Tue, 20 Oct 2015 18:25:38 +0200
+Subject: [PATCH 1/2] lex.c: fix malloc() signal leak in lexsave()
+
+The bug appears not to affect upstream master, where the function
+
+lexsave(void)
+ ... 1x malloc, 1x zalloc
+
+was rewritten to
+
+lex_context_save(struct lex_stack *ls, int toplevel)
+  ... no *alloc at all
+
+Recheck of any possible malloc() signal leaks in current RHEL 6 zsh code needed.
+---
+ Src/lex.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Src/lex.c b/Src/lex.c
+index 33f6430..0c7f539 100644
+--- a/Src/lex.c
++++ b/Src/lex.c
+@@ -271,7 +271,7 @@ lexsave_partial(int parts)
+ {
+     struct lexstack *ls;
+ 
+-    ls = (struct lexstack *)malloc(sizeof(struct lexstack));
++    ls = (struct lexstack *)zalloc(sizeof(struct lexstack));
+ 
+     if (parts & ZCONTEXT_LEX) {
+ 	ls->incmdpos = incmdpos;
+-- 
+2.5.2
+
+
+From 861e4cd5f8ba169f5f63ca1efffdc8ebac5a3d61 Mon Sep 17 00:00:00 2001
+From: Kamil Dudka <kdudka@redhat.com>
+Date: Tue, 20 Oct 2015 18:27:15 +0200
+Subject: [PATCH 2/2] mem.c: queue signals while calling malloc() in realloc()
+
+Bug: https://bugzilla.redhat.com/1267903#c6
+---
+ Src/mem.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/Src/mem.c b/Src/mem.c
+index 9492a60..75622c6 100644
+--- a/Src/mem.c
++++ b/Src/mem.c
+@@ -1513,8 +1513,13 @@ realloc(MALLOC_RET_T p, MALLOC_ARG_T size)
+     int i, l = 0;
+ 
+     /* some system..., see above */
+-    if (!p && size)
+-	return (MALLOC_RET_T) malloc(size);
++    if (!p && size) {
++	queue_signals();
++	r = malloc(size);
++	unqueue_signals();
++	return (MALLOC_RET_T) r;
++    }
++
+     /* and some systems even do this... */
+     if (!p || !size)
+ 	return (MALLOC_RET_T) p;
+-- 
+2.5.2
+

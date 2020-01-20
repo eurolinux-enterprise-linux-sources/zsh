@@ -1,0 +1,97 @@
+From 4f4fc498361ea9965fde31c36cf9971a92479e9f Mon Sep 17 00:00:00 2001
+From: Peter Stephenson <pws@zsh.org>
+Date: Tue, 20 Jan 2015 09:29:22 +0000
+Subject: [PATCH 1/2] users/19751: remove error on failure to close file
+ descriptor by number.
+
+Keep it when closing file descriptor stored in a variable, i.e.
+explicitly opened by the user.
+
+Upstream-commit: e6d964246700581fe22ea834b2ea12dd301e8c3d
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/exec.c            |  7 ++++++-
+ Test/A04redirect.ztst | 10 ++++++----
+ 2 files changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/Src/exec.c b/Src/exec.c
+index 1a4ffe2..fcdc645 100644
+--- a/Src/exec.c
++++ b/Src/exec.c
+@@ -3075,7 +3075,12 @@ execcmd(Estate state, int input, int output, int how, int last1)
+ 		}
+ 		if (fn->fd1 < 10)
+ 		    closemn(mfds, fn->fd1);
+-		if (!closed && zclose(fn->fd1) < 0) {
++		/*
++		 * Only report failures to close file descriptors
++		 * if they're under user control as we don't know
++		 * what the previous status of others was.
++		 */
++		if (!closed && zclose(fn->fd1) < 0 && fn->varid) {
+ 		    zwarn("failed to close file descriptor %d: %e",
+ 			  fn->fd1, errno);
+ 		}
+diff --git a/Test/A04redirect.ztst b/Test/A04redirect.ztst
+index b8086e7..2f21b95 100644
+--- a/Test/A04redirect.ztst
++++ b/Test/A04redirect.ztst
+@@ -152,11 +152,13 @@
+ >hello
+ >goodbye
+ 
+-  ({ exec 3<&- } 2>/dev/null
+-  exec 3<&-
+-  read foo <&-)
++  (exec {varid}<&0
++  exec {varid}<&-
++  print About to close a second time >&2
++  read {varid}<&-)
+ 1:'<&-' redirection
+-*?\(eval\):*: failed to close file descriptor 3:*
++?About to close a second time
++*?\(eval\):*: failed to close file descriptor *
+ 
+   print foo >&-
+ 0:'>&-' redirection
+-- 
+2.4.0
+
+
+From 73ea1de52de3f078ef4e6f96ae5042cfe5e79730 Mon Sep 17 00:00:00 2001
+From: Peter Stephenson <pws@zsh.org>
+Date: Tue, 20 Jan 2015 11:53:42 +0000
+Subject: [PATCH 2/2] users/19756: test for case of closing fd with no error
+ message
+
+Upstream-commit: 638bfa93a009987e57bd7eaa8b2a1c1067a3652a
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Test/A04redirect.ztst | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/Test/A04redirect.ztst b/Test/A04redirect.ztst
+index 2f21b95..70c210d 100644
+--- a/Test/A04redirect.ztst
++++ b/Test/A04redirect.ztst
+@@ -152,11 +152,16 @@
+ >hello
+ >goodbye
+ 
++  ({exec 3<&- } 2>/dev/null
++   exec 3<&-
++   read foo <&-)
++1:'<&-' redirection with numeric fd (no error message on failure)
++
+   (exec {varid}<&0
+   exec {varid}<&-
+   print About to close a second time >&2
+   read {varid}<&-)
+-1:'<&-' redirection
++1:'<&-' redirection with fd in variable (error message on failure)
+ ?About to close a second time
+ *?\(eval\):*: failed to close file descriptor *
+ 
+-- 
+2.4.0
+

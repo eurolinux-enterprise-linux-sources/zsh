@@ -1,0 +1,112 @@
+From f92e6a9a7360b0485ebdaa006042337ffd9aa8df Mon Sep 17 00:00:00 2001
+From: Jun-ichi Takimoto <takimoto-j@kba.biglobe.ne.jp>
+Date: Fri, 6 Feb 2015 23:06:07 +0900
+Subject: [PATCH 1/2] 34456: lopts should be initialized as an array
+
+otherwise an empty element remains in lopts, which causes
+a trouble when _arguments -- '*:' is called.
+
+Upstream-commit: 2810317ae2f2f96d06add76c17510a90f2ea3f62
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Completion/Base/Utility/_arguments | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Completion/Base/Utility/_arguments b/Completion/Base/Utility/_arguments
+index d70c442..1f35e8d 100644
+--- a/Completion/Base/Utility/_arguments
++++ b/Completion/Base/Utility/_arguments
+@@ -26,7 +26,7 @@ if (( long )); then
+ 
+   if (( ! ${(P)+name} )); then
+     local iopts sopts pattern tmpo dir cur cache
+-    typeset -U lopts
++    typeset -Ua lopts
+ 
+     cache=()
+ 
+-- 
+2.5.5
+
+
+From 08801bde8876d8a671165b1856ad99aec5dd6564 Mon Sep 17 00:00:00 2001
+From: Jun-ichi Takimoto <takimoto-j@kba.biglobe.ne.jp>
+Date: Wed, 30 Sep 2015 23:56:14 +0900
+Subject: [PATCH 2/2] 36697: handle options of _arguments correctly
+
+Upstream-commit: 756526eef3e064c3ffb023ae5e5e6df42e6e9162
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Completion/Base/Utility/_arguments | 45 +++++++++++++++++++-------------------
+ 1 file changed, 23 insertions(+), 22 deletions(-)
+
+diff --git a/Completion/Base/Utility/_arguments b/Completion/Base/Utility/_arguments
+index 1f35e8d..87fb20e 100644
+--- a/Completion/Base/Utility/_arguments
++++ b/Completion/Base/Utility/_arguments
+@@ -8,15 +8,33 @@ local oldcontext="$curcontext" hasopts rawret optarg singopt alwopt
+ local setnormarg start rest
+ local -a match mbegin mend
+ 
++subopts=()
++singopt=()
++while [[ "$1" = -([AMO]*|[CRSWnsw]) ]]; do
++  case "$1" in
++  -C)  usecc=yes; shift ;;
++  -O)  subopts=( "${(@P)2}" ); shift 2 ;;
++  -O*) subopts=( "${(@P)${1[3,-1]}}" ); shift ;;
++  -R)  rawret=yes; shift;;
++  -n)  setnormarg=yes; NORMARG=-1; shift;;
++  -w)  optarg=yes; shift;;
++  -W)  alwopt=arg; shift;;
++  -[Ss])  singopt+=( $1 ); shift;;
++  -[AM])  singopt+=( $1 $2 ); shift 2 ;;
++  -[AM]*) singopt+=( $1 ); shift ;;
++  esac
++done
++
++[[ $1 = ':' ]] && shift
++singopt+=( ':' )  # always end with ':' to indicate the end of options
++
++[[ "$PREFIX" = [-+] ]] && alwopt=arg
++
+ long=$argv[(I)--]
+ if (( long )); then
+   local name tmp tmpargv
+ 
+-  if [[ long -eq 1 ]]; then
+-    tmpargv=()
+-  else
+-    tmpargv=( "${(@)argv[1,long-1]}" )
+-  fi
++  tmpargv=( "${(@)argv[1,long-1]}" )  # optspec's before --, if any
+ 
+   name=${~words[1]}
+   [[ "$name" = [^/]*/* ]] && name="$PWD/$name"
+@@ -290,23 +308,6 @@ if (( long )); then
+   set -- "$tmpargv[@]" "${(@P)name}"
+ fi
+ 
+-subopts=()
+-singopt=()
+-while [[ "$1" = -(O*|[CRWnsw]) ]]; do
+-  case "$1" in
+-  -C)  usecc=yes; shift ;;
+-  -O)  subopts=( "${(@P)2}" ); shift 2 ;;
+-  -O*) subopts=( "${(@P)${1[3,-1]}}" ); shift ;;
+-  -R)  rawret=yes; shift;;
+-  -n)  setnormarg=yes; NORMARG=-1; shift;;
+-  -w)  optarg=yes; shift;;
+-  -s)  singopt=(-s); shift;;
+-  -W)  alwopt=arg; shift;;
+-  esac
+-done
+-
+-[[ "$PREFIX" = [-+] ]] && alwopt=arg
+-
+ zstyle -s ":completion:${curcontext}:options" auto-description autod
+ 
+ if (( $# )) && comparguments -i "$autod" "$singopt[@]" "$@"; then
+-- 
+2.5.5
+

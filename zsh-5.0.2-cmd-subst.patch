@@ -1,0 +1,1411 @@
+From 6b8f3f9906ee44be46e022480b6e01755feeaa99 Mon Sep 17 00:00:00 2001
+From: Peter Stephenson <pws@zsh.org>
+Date: Tue, 6 Jan 2015 17:05:17 +0000
+Subject: [PATCH 1/8] Fix command substitutions to parse contents as they are
+ read in.
+
+Do this by refactoring misnamed lexsave()/lexrestore() to allow
+continuity of history and input.
+
+Add test.
+
+Upstream-commit: c0d01a6fe0c67911650730cf13a2b9a0db16e59b
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/init.c            |   3 +-
+ Src/input.c           |  13 +-
+ Src/lex.c             | 498 ++++++++++++++++++++++++++++++++------------------
+ Src/parse.c           |  29 ++-
+ Src/zsh.h             |   9 +
+ Test/D08cmdsubst.ztst |  42 +++++
+ 6 files changed, 401 insertions(+), 193 deletions(-)
+
+diff --git a/Src/init.c b/Src/init.c
+index 0742a9f..78f171d 100644
+--- a/Src/init.c
++++ b/Src/init.c
+@@ -129,7 +129,8 @@ loop(int toplevel, int justonce)
+ 	use_exit_printed = 0;
+ 	intr();			/* interrupts on            */
+ 	lexinit();              /* initialize lexical state */
+-	if (!(prog = parse_event())) {	/* if we couldn't parse a list */
++	if (!(prog = parse_event(ENDINPUT))) {
++	    /* if we couldn't parse a list */
+ 	    hend(NULL);
+ 	    if ((tok == ENDINPUT && !errflag) ||
+ 		(tok == LEXERR && (!isset(SHINSTDIN) || !toplevel)) ||
+diff --git a/Src/input.c b/Src/input.c
+index 5cff22d..1579762 100644
+--- a/Src/input.c
++++ b/Src/input.c
+@@ -175,12 +175,12 @@ shingetline(void)
+ /* Get the next character from the input.
+  * Will call inputline() to get a new line where necessary.
+  */
+-  
++
+ /**/
+ int
+ ingetc(void)
+ {
+-    int lastc;
++    int lastc = ' ';
+ 
+     if (lexstop)
+ 	return ' ';
+@@ -192,7 +192,7 @@ ingetc(void)
+ 		continue;
+ 	    if (((inbufflags & INP_LINENO) || !strin) && lastc == '\n')
+ 		lineno++;
+-	    return lastc;
++	    break;
+ 	}
+ 
+ 	/*
+@@ -204,7 +204,7 @@ ingetc(void)
+ 	 */
+ 	if (!inbufct && (strin || errflag)) {
+ 	    lexstop = 1;
+-	    return ' ';
++	    break;
+ 	}
+ 	/* If the next element down the input stack is a continuation of
+ 	 * this, use it.
+@@ -215,8 +215,10 @@ ingetc(void)
+ 	}
+ 	/* As a last resort, get some more input */
+ 	if (inputline())
+-	    return ' ';
++	    break;
+     }
++    zshlex_raw_add(lastc);
++    return lastc;
+ }
+ 
+ /* Read a line from the current command stream and store it as input */
+@@ -421,6 +423,7 @@ inungetc(int c)
+ 	    inbufleft = 0;
+ 	    inbuf = inbufptr = "";
+ 	}
++	zshlex_raw_back();
+     }
+ }
+ 
+diff --git a/Src/lex.c b/Src/lex.c
+index 82bf848..bcceda6 100644
+--- a/Src/lex.c
++++ b/Src/lex.c
+@@ -146,6 +146,16 @@ mod_export int parend;
+ /**/
+ mod_export int nocomments;
+ 
++/* add raw input characters while parsing command substitution */
++
++/**/
++static int lex_add_raw;
++
++/* variables associated with the above */
++
++static char *tokstr_raw, *bptr_raw;
++static int len_raw, bsiz_raw;
++
+ /* text of punctuation tokens */
+ 
+ /**/
+@@ -214,6 +224,11 @@ struct lexstack {
+     char *bptr;
+     int bsiz;
+     int len;
++    int lex_add_raw;
++    char *tokstr_raw;
++    char *bptr_raw;
++    int bsiz_raw;
++    int len_raw;
+     short *chwords;
+     int chwordlen;
+     int chwordpos;
+@@ -239,89 +254,121 @@ struct lexstack {
+ 
+ static struct lexstack *lstack = NULL;
+ 
+-/* save the lexical state */
++/* save the context or parts thereof */
+ 
+ /* is this a hack or what? */
+ 
+ /**/
+ mod_export void
+-lexsave(void)
++lexsave_partial(int parts)
+ {
+     struct lexstack *ls;
+ 
+     ls = (struct lexstack *)malloc(sizeof(struct lexstack));
+ 
+-    ls->incmdpos = incmdpos;
+-    ls->incond = incond;
+-    ls->incasepat = incasepat;
+-    ls->dbparens = dbparens;
+-    ls->isfirstln = isfirstln;
+-    ls->isfirstch = isfirstch;
+-    ls->histactive = histactive;
+-    ls->histdone = histdone;
+-    ls->lexflags = lexflags;
+-    ls->stophist = stophist;
+-    stophist = 0;
+-    if (!lstack) {
+-	/* top level, make this version visible to ZLE */
+-	zle_chline = chline;
+-	/* ensure line stored is NULL-terminated */
+-	if (hptr)
+-	    *hptr = '\0';
++    if (parts & ZCONTEXT_LEX) {
++	ls->incmdpos = incmdpos;
++	ls->incond = incond;
++	ls->incasepat = incasepat;
++	ls->dbparens = dbparens;
++	ls->isfirstln = isfirstln;
++	ls->isfirstch = isfirstch;
++	ls->lexflags = lexflags;
++
++	ls->tok = tok;
++	ls->isnewlin = isnewlin;
++	ls->tokstr = tokstr;
++	ls->zshlextext = zshlextext;
++	ls->bptr = bptr;
++	ls->bsiz = bsiz;
++	ls->len = len;
++	ls->lex_add_raw = lex_add_raw;
++	ls->tokstr_raw = tokstr_raw;
++	ls->bptr_raw = bptr_raw;
++	ls->bsiz_raw = bsiz_raw;
++	ls->len_raw = len_raw;
++	ls->lexstop = lexstop;
++	ls->toklineno = toklineno;
++
++	tokstr = zshlextext = bptr = NULL;
++	bsiz = 256;
++	tokstr_raw = bptr_raw = NULL;
++	bsiz_raw = len_raw = lex_add_raw = 0;
++
++	inredir = 0;
++    }
++    if (parts & ZCONTEXT_HIST) {
++	if (!lstack) {
++	    /* top level, make this version visible to ZLE */
++	    zle_chline = chline;
++	    /* ensure line stored is NULL-terminated */
++	    if (hptr)
++		*hptr = '\0';
++	}
++	ls->histactive = histactive;
++	ls->histdone = histdone;
++	ls->stophist = stophist;
++	ls->hline = chline;
++	ls->hptr = hptr;
++	ls->chwords = chwords;
++	ls->chwordlen = chwordlen;
++	ls->chwordpos = chwordpos;
++	ls->hwgetword = hwgetword;
++	ls->hgetc = hgetc;
++	ls->hungetc = hungetc;
++	ls->hwaddc = hwaddc;
++	ls->hwbegin = hwbegin;
++	ls->hwend = hwend;
++	ls->addtoline = addtoline;
++	ls->hlinesz = hlinesz;
++	/*
++	 * We save and restore the command stack with history
++	 * as it's visible to the user interactively, so if
++	 * we're preserving history state we'll continue to
++	 * show the current set of commands from input.
++	 */
++	ls->cstack = cmdstack;
++	ls->csp = cmdsp;
++
++	stophist = 0;
++	chline = NULL;
++	hptr = NULL;
++	histactive = 0;
++	cmdstack = (unsigned char *)zalloc(CMDSTACKSZ);
++	cmdsp = 0;
++    }
++    if (parts & ZCONTEXT_PARSE) {
++	ls->hdocs = hdocs;
++	ls->eclen = eclen;
++	ls->ecused = ecused;
++	ls->ecnpats = ecnpats;
++	ls->ecbuf = ecbuf;
++	ls->ecstrs = ecstrs;
++	ls->ecsoffs = ecsoffs;
++	ls->ecssub = ecssub;
++	ls->ecnfunc = ecnfunc;
++	ecbuf = NULL;
++	hdocs = NULL;
+     }
+-    ls->hline = chline;
+-    chline = NULL;
+-    ls->hptr = hptr;
+-    hptr = NULL;
+-    ls->hlinesz = hlinesz;
+-    ls->cstack = cmdstack;
+-    ls->csp = cmdsp;
+-    cmdstack = (unsigned char *)zalloc(CMDSTACKSZ);
+-    ls->tok = tok;
+-    ls->isnewlin = isnewlin;
+-    ls->tokstr = tokstr;
+-    ls->zshlextext = zshlextext;
+-    ls->bptr = bptr;
+-    tokstr = zshlextext = bptr = NULL;
+-    ls->bsiz = bsiz;
+-    bsiz = 256;
+-    ls->len = len;
+-    ls->chwords = chwords;
+-    ls->chwordlen = chwordlen;
+-    ls->chwordpos = chwordpos;
+-    ls->hwgetword = hwgetword;
+-    ls->lexstop = lexstop;
+-    ls->hdocs = hdocs;
+-    ls->hgetc = hgetc;
+-    ls->hungetc = hungetc;
+-    ls->hwaddc = hwaddc;
+-    ls->hwbegin = hwbegin;
+-    ls->hwend = hwend;
+-    ls->addtoline = addtoline;
+-    ls->eclen = eclen;
+-    ls->ecused = ecused;
+-    ls->ecnpats = ecnpats;
+-    ls->ecbuf = ecbuf;
+-    ls->ecstrs = ecstrs;
+-    ls->ecsoffs = ecsoffs;
+-    ls->ecssub = ecssub;
+-    ls->ecnfunc = ecnfunc;
+-    ls->toklineno = toklineno;
+-    cmdsp = 0;
+-    inredir = 0;
+-    hdocs = NULL;
+-    histactive = 0;
+-    ecbuf = NULL;
+ 
+     ls->next = lstack;
+     lstack = ls;
+ }
+ 
+-/* restore lexical state */
++/* save context in full */
+ 
+ /**/
+ mod_export void
+-lexrestore(void)
++lexsave(void)
++{
++    lexsave_partial(ZCONTEXT_HIST|ZCONTEXT_LEX|ZCONTEXT_PARSE);
++}
++
++/* restore context or part therefore */
++
++/**/
++mod_export void
++lexrestore_partial(int parts)
+ {
+     struct lexstack *ln = lstack;
+ 
+@@ -330,65 +377,89 @@ lexrestore(void)
+     queue_signals();
+     lstack = lstack->next;
+ 
+-    if (!lstack) {
+-	/* Back to top level: don't need special ZLE value */
+-	DPUTS(ln->hline != zle_chline, "BUG: Ouch, wrong chline for ZLE");
+-	zle_chline = NULL;
++    if (parts & ZCONTEXT_LEX) {
++	incmdpos = ln->incmdpos;
++	incond = ln->incond;
++	incasepat = ln->incasepat;
++	dbparens = ln->dbparens;
++	isfirstln = ln->isfirstln;
++	isfirstch = ln->isfirstch;
++	lexflags = ln->lexflags;
++	tok = ln->tok;
++	isnewlin = ln->isnewlin;
++	tokstr = ln->tokstr;
++	zshlextext = ln->zshlextext;
++	bptr = ln->bptr;
++	bsiz = ln->bsiz;
++	len = ln->len;
++	lex_add_raw = ln->lex_add_raw;
++	tokstr_raw = ln->tokstr_raw;
++	bptr_raw = ln->bptr_raw;
++	bsiz_raw = ln->bsiz_raw;
++	len_raw = ln->len_raw;
++	lexstop = ln->lexstop;
++	toklineno = ln->toklineno;
++    }
++
++    if (parts & ZCONTEXT_HIST) {
++	if (!lstack) {
++	    /* Back to top level: don't need special ZLE value */
++	    DPUTS(ln->hline != zle_chline, "BUG: Ouch, wrong chline for ZLE");
++	    zle_chline = NULL;
++	}
++	histactive = ln->histactive;
++	histdone = ln->histdone;
++	stophist = ln->stophist;
++	chline = ln->hline;
++	hptr = ln->hptr;
++	chwords = ln->chwords;
++	chwordlen = ln->chwordlen;
++	chwordpos = ln->chwordpos;
++	hwgetword = ln->hwgetword;
++	hgetc = ln->hgetc;
++	hungetc = ln->hungetc;
++	hwaddc = ln->hwaddc;
++	hwbegin = ln->hwbegin;
++	hwend = ln->hwend;
++	addtoline = ln->addtoline;
++	hlinesz = ln->hlinesz;
++	if (cmdstack)
++	    zfree(cmdstack, CMDSTACKSZ);
++	cmdstack = ln->cstack;
++	cmdsp = ln->csp;
++    }
++
++    if (parts & ZCONTEXT_PARSE) {
++	if (ecbuf)
++	    zfree(ecbuf, eclen);
++
++	hdocs = ln->hdocs;
++	eclen = ln->eclen;
++	ecused = ln->ecused;
++	ecnpats = ln->ecnpats;
++	ecbuf = ln->ecbuf;
++	ecstrs = ln->ecstrs;
++	ecsoffs = ln->ecsoffs;
++	ecssub = ln->ecssub;
++	ecnfunc = ln->ecnfunc;
++
++	errflag = 0;
+     }
+ 
+-    incmdpos = ln->incmdpos;
+-    incond = ln->incond;
+-    incasepat = ln->incasepat;
+-    dbparens = ln->dbparens;
+-    isfirstln = ln->isfirstln;
+-    isfirstch = ln->isfirstch;
+-    histactive = ln->histactive;
+-    histdone = ln->histdone;
+-    lexflags = ln->lexflags;
+-    stophist = ln->stophist;
+-    chline = ln->hline;
+-    hptr = ln->hptr;
+-    if (cmdstack)
+-	zfree(cmdstack, CMDSTACKSZ);
+-    cmdstack = ln->cstack;
+-    cmdsp = ln->csp;
+-    tok = ln->tok;
+-    isnewlin = ln->isnewlin;
+-    tokstr = ln->tokstr;
+-    zshlextext = ln->zshlextext;
+-    bptr = ln->bptr;
+-    bsiz = ln->bsiz;
+-    len = ln->len;
+-    chwords = ln->chwords;
+-    chwordlen = ln->chwordlen;
+-    chwordpos = ln->chwordpos;
+-    hwgetword = ln->hwgetword;
+-    lexstop = ln->lexstop;
+-    hdocs = ln->hdocs;
+-    hgetc = ln->hgetc;
+-    hungetc = ln->hungetc;
+-    hwaddc = ln->hwaddc;
+-    hwbegin = ln->hwbegin;
+-    hwend = ln->hwend;
+-    addtoline = ln->addtoline;
+-    if (ecbuf)
+-	zfree(ecbuf, eclen);
+-    eclen = ln->eclen;
+-    ecused = ln->ecused;
+-    ecnpats = ln->ecnpats;
+-    ecbuf = ln->ecbuf;
+-    ecstrs = ln->ecstrs;
+-    ecsoffs = ln->ecsoffs;
+-    ecssub = ln->ecssub;
+-    ecnfunc = ln->ecnfunc;
+-    hlinesz = ln->hlinesz;
+-    toklineno = ln->toklineno;
+-    errflag = 0;
+     free(ln);
+ 
+     unqueue_signals();
+ }
+ 
++/* complete restore context */
++
++/**/
++mod_export void
++lexrestore(void)
++{
++    lexrestore_partial(ZCONTEXT_HIST|ZCONTEXT_LEX|ZCONTEXT_PARSE);
++}
++
+ /**/
+ void
+ zshlex(void)
+@@ -1889,80 +1960,151 @@ exalias(void)
+     return 0;
+ }
+ 
+-/* skip (...) */
++/**/
++void
++zshlex_raw_add(int c)
++{
++    if (!lex_add_raw)
++	return;
++
++    *bptr_raw++ = c;
++    if (bsiz_raw == ++len_raw) {
++	int newbsiz = bsiz_raw * 2;
++
++	tokstr_raw = (char *)hrealloc(tokstr_raw, bsiz_raw, newbsiz);
++	bptr_raw = tokstr_raw + len_raw;
++	memset(bptr_raw, 0, newbsiz - bsiz_raw);
++	bsiz_raw = newbsiz;
++    }
++}
++
++/**/
++void
++zshlex_raw_back(void)
++{
++    if (!lex_add_raw)
++	return;
++    bptr_raw--;
++    len_raw--;
++}
++
++/*
++ * Skip (...) for command-style substitutions: $(...), <(...), >(...)
++ *
++ * In order to ensure we don't stop at closing parentheses with
++ * some other syntactic significance, we'll parse the input until
++ * we find an unmatched closing parenthesis.  However, we'll throw
++ * away the result of the parsing and just keep the string we've built
++ * up on the way.
++ */
+ 
+ /**/
+ static int
+ skipcomm(void)
+ {
+-    int pct = 1, c, start = 1;
++    char *new_tokstr, *new_bptr = bptr_raw;
++    int new_len, new_bsiz, new_lexstop, new_lex_add_raw;
+ 
+     cmdpush(CS_CMDSUBST);
+     SETPARBEGIN
+-    c = Inpar;
+-    do {
+-	int iswhite;
+-	add(c);
+-	c = hgetc();
+-	if (itok(c) || lexstop)
+-	    break;
+-	iswhite = inblank(c);
+-	switch (c) {
+-	case '(':
+-	    pct++;
+-	    break;
+-	case ')':
+-	    pct--;
+-	    break;
+-	case '\\':
+-	    add(c);
+-	    c = hgetc();
+-	    break;
+-	case '\'': {
+-	    int strquote = bptr[-1] == '$';
+-	    add(c);
+-	    STOPHIST
+-	    while ((c = hgetc()) != '\'' && !lexstop) {
+-		if (c == '\\' && strquote) {
+-		    add(c);
+-		    c = hgetc();
+-		}
+-		add(c);
+-	    }
+-	    ALLOWHIST
+-	    break;
+-	}
+-	case '\"':
+-	    add(c);
+-	    while ((c = hgetc()) != '\"' && !lexstop)
+-		if (c == '\\') {
+-		    add(c);
+-		    add(hgetc());
+-		} else
+-		    add(c);
+-	    break;
+-	case '`':
+-	    add(c);
+-	    while ((c = hgetc()) != '`' && !lexstop)
+-		if (c == '\\')
+-		    add(c), add(hgetc());
+-		else
+-		    add(c);
+-	    break;
+-	case '#':
+-	    if (start) {
+-		add(c);
+-		while ((c = hgetc()) != '\n' && !lexstop)
+-		    add(c);
+-		iswhite = 1;
+-	    }
+-	    break;
++    add(Inpar);
++
++    new_lex_add_raw = lex_add_raw + 1;
++    if (!lex_add_raw) {
++	/*
++	 * We'll combine the string so far with the input
++	 * read in for the command substitution.  To do this
++	 * we'll just propagate the current tokstr etc. as the
++	 * variables used for adding raw input, and
++	 * ensure we swap those for the real tokstr etc. at the end.
++	 *
++	 * However, we need to save and restore the rest of the
++	 * lexical and parse state as we're effectively parsing
++	 * an internal string.  Because we're still parsing it from
++	 * the original input source (we have to --- we don't know
++	 * when to stop inputting it otherwise and can't rely on
++	 * the input being recoverable until we've read it) we need
++	 * to keep the same history context.
++	 */
++	new_tokstr = tokstr;
++	new_bptr = bptr;
++	new_len = len;
++	new_bsiz = bsiz;
++
++	lexsave_partial(ZCONTEXT_LEX|ZCONTEXT_PARSE);
++    } else {
++	/*
++	 * Set up for nested command subsitution, however
++	 * we don't actually need the string until we get
++	 * back to the top level and recover the lot.
++	 * The $() body just appears empty.
++	 *
++	 * We do need to propagate the raw variables which would
++	 * otherwise by cleared, though.
++	 */
++	new_tokstr = tokstr_raw;
++	new_bptr = bptr_raw;
++	new_len = len_raw;
++	new_bsiz = bsiz_raw;
++
++	lexsave_partial(ZCONTEXT_LEX|ZCONTEXT_PARSE);
++    }
++    tokstr_raw = new_tokstr;
++    bsiz_raw = new_bsiz;
++    len_raw = new_len;
++    bptr_raw = new_bptr;
++    lex_add_raw = new_lex_add_raw;
++
++    if (!parse_event(OUTPAR) || tok != OUTPAR)
++	lexstop = 1;
++     /* Outpar lexical token gets added in caller if present */
++
++    /*
++     * We're going to keep the full raw input string
++     * as the current token string after popping the stack.
++     */
++    new_tokstr = tokstr_raw;
++    new_bptr = bptr_raw;
++    new_len = len_raw;
++    new_bsiz = bsiz_raw;
++    /*
++     * We're also going to propagate the lexical state:
++     * if we couldn't parse the command substitution we
++     * can't continue.
++     */
++    new_lexstop = lexstop;
++
++    lexrestore_partial(ZCONTEXT_LEX|ZCONTEXT_PARSE);
++
++    if (lex_add_raw) {
++	/*
++	 * Keep going, so retain the raw variables.
++	 */
++	tokstr_raw = new_tokstr;
++	bptr_raw = new_bptr;
++	len_raw = new_len;
++	bsiz_raw = new_bsiz;
++    } else {
++	if (!new_lexstop) {
++	    /* Ignore the ')' added on input */
++	    new_len--;
++	    *--new_bptr = '\0';
+ 	}
+-	start = iswhite;
++
++	/*
++	 * Convince the rest of lex.c we were examining a string
++	 * all along.
++	 */
++	tokstr = new_tokstr;
++	bptr = new_bptr;
++	len = new_len;
++	bsiz = new_bsiz;
++	lexstop = new_lexstop;
+     }
+-    while (pct);
++
+     if (!lexstop)
+ 	SETPAREND
+     cmdpop();
++
+     return lexstop;
+ }
+diff --git a/Src/parse.c b/Src/parse.c
+index 753080d..b0a7624 100644
+--- a/Src/parse.c
++++ b/Src/parse.c
+@@ -360,7 +360,8 @@ ecstrcode(char *s)
+ 
+ /* Initialise wordcode buffer. */
+ 
+-static void
++/**/
++void
+ init_parse(void)
+ {
+     if (ecbuf) zfree(ecbuf, eclen);
+@@ -439,11 +440,15 @@ clear_hdocs()
+  * event	: ENDINPUT
+  *			| SEPER
+  *			| sublist [ SEPER | AMPER | AMPERBANG ]
++ *
++ * cmdsubst indicates our event is part of a command-style
++ * substitution terminated by the token indicationg, usual closing
++ * parenthesis.  In other cases endtok is ENDINPUT.
+  */
+ 
+ /**/
+ Eprog
+-parse_event(void)
++parse_event(int endtok)
+ {
+     tok = ENDINPUT;
+     incmdpos = 1;
+@@ -451,36 +456,42 @@ parse_event(void)
+     zshlex();
+     init_parse();
+ 
+-    if (!par_event()) {
++    if (!par_event(endtok)) {
+         clear_hdocs();
+         return NULL;
+     }
++    if (endtok != ENDINPUT) {
++	/* don't need to build an eprog for this */
++	return &dummy_eprog;
++    }
+     return bld_eprog();
+ }
+ 
+ /**/
+-static int
+-par_event(void)
++int
++par_event(int endtok)
+ {
+     int r = 0, p, c = 0;
+ 
+     while (tok == SEPER) {
+-	if (isnewlin > 0)
++	if (isnewlin > 0 && endtok == ENDINPUT)
+ 	    return 0;
+ 	zshlex();
+     }
+     if (tok == ENDINPUT)
+ 	return 0;
++    if (tok == endtok)
++	return 0;
+ 
+     p = ecadd(0);
+ 
+     if (par_sublist(&c)) {
+-	if (tok == ENDINPUT) {
++	if (tok == ENDINPUT || tok == endtok) {
+ 	    set_list_code(p, Z_SYNC, c);
+ 	    r = 1;
+ 	} else if (tok == SEPER) {
+ 	    set_list_code(p, Z_SYNC, c);
+-	    if (isnewlin <= 0)
++	    if (isnewlin <= 0 || endtok != ENDINPUT)
+ 		zshlex();
+ 	    r = 1;
+ 	} else if (tok == AMPER) {
+@@ -509,7 +520,7 @@ par_event(void)
+     } else {
+ 	int oec = ecused;
+ 
+-	if (!par_event()) {
++	if (!par_event(endtok)) {
+ 	    ecused = oec;
+ 	    ecbuf[p] |= wc_bdata(Z_END);
+ 	}
+diff --git a/Src/zsh.h b/Src/zsh.h
+index 207ef18..b3391ed 100644
+--- a/Src/zsh.h
++++ b/Src/zsh.h
+@@ -395,6 +395,15 @@ enum {
+ #define META_HEAPDUP	6
+ #define META_HREALLOC	7
+ 
++/* Context to save and restore (bit fields) */
++enum {
++    /* History mechanism */
++    ZCONTEXT_HIST       = (1<<0),
++    /* Lexical analyser */
++    ZCONTEXT_LEX        = (1<<1),
++    /* Parser */
++    ZCONTEXT_PARSE      = (1<<2)
++};
+ 
+ /**************************/
+ /* Abstract types for zsh */
+diff --git a/Test/D08cmdsubst.ztst b/Test/D08cmdsubst.ztst
+index 5661b0a..a4c69a0 100644
+--- a/Test/D08cmdsubst.ztst
++++ b/Test/D08cmdsubst.ztst
+@@ -106,3 +106,45 @@
+ >34
+ >"
+ >" OK
++
++ echo $(case foo in
++ foo)
++ echo This test worked.
++ ;;
++ bar)
++ echo This test failed in a rather bizarre way.
++ ;;
++ *)
++ echo This test failed.
++ ;;
++ esac)
++0:Parsing of command substitution with unmatched parentheses: case, basic
++>This test worked.
++
++ echo "$(case bar in
++ foo)
++ echo This test spoobed.
++ ;;
++ bar)
++ echo This test plurbled.
++ ;;
++ *)
++ echo This test bzonked.
++ ;;
++ esac)"
++0:Parsing of command substitution with unmatched parentheses: case with quotes
++>This test plurbled.
++
++ echo before $(
++ echo start; echo unpretentious |
++ while read line; do
++   case $line in
++   u*)
++   print Word began with u
++   print and ended with a crunch
++   ;;
++   esac
++ done | sed -e 's/Word/Universe/'; echo end
++ ) after
++0:Parsing of command substitution with ummatched parentheses: with frills
++>before start Universe began with u and ended with a crunch end after
+-- 
+2.4.3
+
+
+From 925112048811087520954e0c739b29371eee188a Mon Sep 17 00:00:00 2001
+From: Kamil Dudka <kdudka@redhat.com>
+Date: Thu, 8 Jan 2015 21:39:26 +0000
+Subject: [PATCH 2/8] Resolves: #1338689 - better initialize parser state
+
+This fix is isolated out from a huge upstream commit that includes major
+code refactoring changes together with the initialization fix actually
+needed to resolve #1338689.
+
+Upstream-commit: cfd91eac0732da8ece012ca4ab051d928a85c9dd
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/hist.c  |  5 +++++
+ Src/parse.c | 20 ++++++++++++++++++--
+ 2 files changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/Src/hist.c b/Src/hist.c
+index 561e2ac..4ba61b1 100644
+--- a/Src/hist.c
++++ b/Src/hist.c
+@@ -804,6 +804,11 @@ strinbeg(int dohist)
+     strin++;
+     hbegin(dohist);
+     lexinit();
++    /*
++     * Also initialise some variables owned by the parser but
++     * used for communication between the parser and lexer.
++     */
++    init_parse_status();
+ }
+ 
+ /* done reading a string */
+diff --git a/Src/parse.c b/Src/parse.c
+index b0a7624..b3b004b 100644
+--- a/Src/parse.c
++++ b/Src/parse.c
+@@ -358,6 +358,21 @@ ecstrcode(char *s)
+     } while (0)
+ 
+ 
++/**/
++mod_export void
++init_parse_status(void)
++{
++    /*
++     * These variables are currently declared by the parser, so we
++     * initialise them here.  Possibly they are more naturally declared
++     * by the lexical anaylser; however, as they are used for signalling
++     * between the two it's a bit ambiguous.  We clear them when
++     * using the lexical analyser for strings as well as here.
++     */
++    incasepat = incond = inredir = infor = 0;
++    incmdpos = 1;
++}
++
+ /* Initialise wordcode buffer. */
+ 
+ /**/
+@@ -372,6 +387,8 @@ init_parse(void)
+     ecsoffs = ecnpats = 0;
+     ecssub = 0;
+     ecnfunc = 0;
++
++    init_parse_status();
+ }
+ 
+ /* Build eprog. */
+@@ -535,9 +552,8 @@ parse_list(void)
+     int c = 0;
+ 
+     tok = ENDINPUT;
+-    incmdpos = 1;
+-    zshlex();
+     init_parse();
++    zshlex();
+     par_list(&c);
+     if (tok != ENDINPUT) {
+         clear_hdocs();
+-- 
+2.5.5
+
+
+From 00bc31b497525433dbaeafd3e7b92c7fe364dc8c Mon Sep 17 00:00:00 2001
+From: Peter Stephenson <pws@zsh.org>
+Date: Wed, 15 Apr 2015 10:20:06 +0100
+Subject: [PATCH 3/8] 34892 (slightly tweaked): math evaluation fix
+
+An empty expression resulting from substitution includes a
+Nularg, which needs handling the same as an empty string.
+
+Upstream-commit: 2ef4b38461dfb554ed2226d9de8958703bc00b98
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/math.c         | 15 ++++++++++++++-
+ Test/C01arith.ztst |  4 ++++
+ 2 files changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/Src/math.c b/Src/math.c
+index e90d6a5..d6db7d3 100644
+--- a/Src/math.c
++++ b/Src/math.c
+@@ -1330,7 +1330,7 @@ matheval(char *s)
+     if (!mlevel)
+ 	outputradix = 0;
+ 
+-    if (!*s) {
++    if (!*s || *s == Nularg) {
+ 	x.type = MN_INTEGER;
+ 	x.u.l = 0;
+ 	return x;
+@@ -1358,6 +1358,19 @@ mathevalarg(char *s, char **ss)
+     mnumber x;
+     int xmtok = mtok;
+ 
++    /*
++     * At this entry point we don't allow an empty expression,
++     * whereas we do with matheval().  I'm not sure if this
++     * difference is deliberate, but it does mean that e.g.
++     * $array[$ind] where ind hasn't been set produces an error,
++     * which is probably safe.
++     *
++     * To avoid a more opaque error further in, bail out here.
++     */
++    if (!*s || *s == Nularg) {
++       zerr("bad math expression: empty string");
++       return (zlong)0;
++    }
+     x = mathevall(s, MPREC_ARG, ss);
+     if (mtok == COMMA)
+ 	(*ss)--;
+diff --git a/Test/C01arith.ztst b/Test/C01arith.ztst
+index 02d1519..33b03ef 100644
+--- a/Test/C01arith.ztst
++++ b/Test/C01arith.ztst
+@@ -243,3 +243,7 @@
+ >6000000
+ >5000
+ >255
++
++  print $((`:`))
++0:Null string in arithmetic evaluation after command substitution
++>0
+-- 
+2.4.6
+
+
+From 0c1450a286e578a1cfe266bf743faf2f0719f85b Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Wed, 29 Jul 2015 22:36:45 -0700
+Subject: [PATCH 4/8] 35953: fix handling of command substitution in math
+ context
+
+Upstream-commit: c0a80171ee615b52a15a6fc8efe83c2bb53451d2
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/lex.c            | 6 +++++-
+ Test/A01grammar.ztst | 6 ++++++
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/Src/lex.c b/Src/lex.c
+index bcceda6..f43b92b 100644
+--- a/Src/lex.c
++++ b/Src/lex.c
+@@ -1541,7 +1541,7 @@ dquote_parse(char endchar, int sub)
+ {
+     int pct = 0, brct = 0, bct = 0, intick = 0, err = 0;
+     int c;
+-    int math = endchar == ')' || endchar == ']';
++    int math = endchar == ')' || endchar == ']' || infor;
+     int zlemath = math && zlemetacs > zlemetall + addedx - inbufct;
+ 
+     while (((c = hgetc()) != endchar || bct ||
+@@ -2004,7 +2004,9 @@ skipcomm(void)
+ {
+     char *new_tokstr, *new_bptr = bptr_raw;
+     int new_len, new_bsiz, new_lexstop, new_lex_add_raw;
++    int save_infor = infor;
+ 
++    infor = 0;
+     cmdpush(CS_CMDSUBST);
+     SETPARBEGIN
+     add(Inpar);
+@@ -2054,6 +2056,7 @@ skipcomm(void)
+     len_raw = new_len;
+     bptr_raw = new_bptr;
+     lex_add_raw = new_lex_add_raw;
++    dbparens = 0;	/* restored by zcontext_restore_partial() */
+ 
+     if (!parse_event(OUTPAR) || tok != OUTPAR)
+ 	lexstop = 1;
+@@ -2105,6 +2108,7 @@ skipcomm(void)
+     if (!lexstop)
+ 	SETPAREND
+     cmdpop();
++    infor = save_infor;
+ 
+     return lexstop;
+ }
+diff --git a/Test/A01grammar.ztst b/Test/A01grammar.ztst
+index f04ddda..584ebd6 100644
+--- a/Test/A01grammar.ztst
++++ b/Test/A01grammar.ztst
+@@ -169,6 +169,12 @@
+ >1
+ >2
+ 
++  for (( $(true); ; )); do break; done
++  for (( ; $(true); )); do break; done
++  for (( ; ; $(true) )); do break; done
++  for (( ; $((1)); )); do break; done
++0:regression test, nested cmdsubst in arithmetic `for' loop
++
+   for keyvar valvar in key1 val1 key2 val2; do
+      print key=$keyvar val=$valvar
+   done
+-- 
+2.4.6
+
+
+From 821815bd9c24a84d8bb5796732ab6144b35e7d27 Mon Sep 17 00:00:00 2001
+From: Peter Stephenson <p.w.stephenson@ntlworld.com>
+Date: Sat, 10 Jan 2015 20:28:57 +0000
+Subject: [PATCH 5/8] 34220: new $(...) handling needs to back up over alias
+ expansion
+
+Upstream-commit: 3b32abafdb019cfb8f29908bc3d148e01518981d
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/input.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/Src/input.c b/Src/input.c
+index 1579762..5b782dc 100644
+--- a/Src/input.c
++++ b/Src/input.c
+@@ -532,6 +532,12 @@ inpush(char *str, int flags, Alias inalias)
+ static void
+ inpoptop(void)
+ {
++    if (!lexstop) {
++	inbufflags &= ~INP_ALCONT;
++	while (inbufptr > inbuf)
++	    inungetc(inbufptr[-1]);
++    }
++
+     if (inbuf && (inbufflags & INP_FREE))
+ 	free(inbuf);
+ 
+-- 
+2.4.6
+
+
+From 1c731b7d1178a2623aa1b986f38a7decebf2c993 Mon Sep 17 00:00:00 2001
+From: Peter Stephenson <pws@zsh.org>
+Date: Fri, 16 Jan 2015 13:20:05 +0000
+Subject: [PATCH 6/8] 34304: improve use of new cmd subst in completion
+
+Upstream-commit: db05cc51fa2298cf128e480d3ac8e5373029f6b9
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/lex.c | 113 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++------
+ 1 file changed, 103 insertions(+), 10 deletions(-)
+
+diff --git a/Src/lex.c b/Src/lex.c
+index f43b92b..45c1117 100644
+--- a/Src/lex.c
++++ b/Src/lex.c
+@@ -88,6 +88,12 @@ int inalmore;
+ int nocorrect;
+ 
+ /*
++ * TBD: the following exported variables are part of the non-interface
++ * with ZLE for completion.  They are poorly named and the whole
++ * scheme is incredibly brittle.  One piece of robustness is applied:
++ * the variables are only set if LEXFLAGS_ZLE is set.  Improvements
++ * should therefore concentrate on areas with this flag set.
++ *
+  * Cursor position and line length in zle when the line is
+  * metafied for access from the main shell.
+  */
+@@ -111,6 +117,16 @@ mod_export int addedx;
+ /**/
+ mod_export int wb, we;
+ 
++/**/
++mod_export int wordbeg;
++
++/**/
++mod_export int parbegin;
++
++/**/
++mod_export int parend;
++
++
+ /* 1 if aliases should not be expanded */
+ 
+ /**/
+@@ -132,15 +148,6 @@ mod_export int noaliases;
+ /**/
+ mod_export int lexflags;
+ 
+-/**/
+-mod_export int wordbeg;
+-
+-/**/
+-mod_export int parbegin;
+-
+-/**/
+-mod_export int parend;
+-
+ /* don't recognize comments */
+ 
+ /**/
+@@ -791,7 +798,8 @@ gettok(void)
+     if (lexstop)
+ 	return (errflag) ? LEXERR : ENDINPUT;
+     isfirstln = 0;
+-    wordbeg = inbufct - (qbang && c == bangchar);
++    if ((lexflags & LEXFLAGS_ZLE))
++	wordbeg = inbufct - (qbang && c == bangchar);
+     hwbegin(-1-(qbang && c == bangchar));
+     /* word includes the last character read and possibly \ before ! */
+     if (dbparens) {
+@@ -2002,6 +2010,78 @@ zshlex_raw_back(void)
+ static int
+ skipcomm(void)
+ {
++#ifdef ZSH_OLD_SKIPCOMM
++    int pct = 1, c, start = 1;
++
++    cmdpush(CS_CMDSUBST);
++    SETPARBEGIN
++    c = Inpar;
++    do {
++	int iswhite;
++	add(c);
++	c = hgetc();
++	if (itok(c) || lexstop)
++	    break;
++	iswhite = inblank(c);
++	switch (c) {
++	case '(':
++	    pct++;
++	    break;
++	case ')':
++	    pct--;
++	    break;
++	case '\\':
++	    add(c);
++	    c = hgetc();
++	    break;
++	case '\'': {
++	    int strquote = lexbuf.ptr[-1] == '$';
++	    add(c);
++	    STOPHIST
++	    while ((c = hgetc()) != '\'' && !lexstop) {
++		if (c == '\\' && strquote) {
++		    add(c);
++		    c = hgetc();
++		}
++		add(c);
++	    }
++	    ALLOWHIST
++	    break;
++	}
++	case '\"':
++	    add(c);
++	    while ((c = hgetc()) != '\"' && !lexstop)
++		if (c == '\\') {
++		    add(c);
++		    add(hgetc());
++		} else
++		    add(c);
++	    break;
++	case '`':
++	    add(c);
++	    while ((c = hgetc()) != '`' && !lexstop)
++		if (c == '\\')
++		    add(c), add(hgetc());
++		else
++		    add(c);
++	    break;
++	case '#':
++	    if (start) {
++		add(c);
++		while ((c = hgetc()) != '\n' && !lexstop)
++		    add(c);
++		iswhite = 1;
++	    }
++	    break;
++	}
++	start = iswhite;
++    }
++    while (pct);
++    if (!lexstop)
++	SETPAREND
++    cmdpop();
++    return lexstop;
++#else
+     char *new_tokstr, *new_bptr = bptr_raw;
+     int new_len, new_bsiz, new_lexstop, new_lex_add_raw;
+     int save_infor = infor;
+@@ -2057,6 +2137,18 @@ skipcomm(void)
+     bptr_raw = new_bptr;
+     lex_add_raw = new_lex_add_raw;
+     dbparens = 0;	/* restored by zcontext_restore_partial() */
++    /*
++     * Don't do any ZLE specials down here: they're only needed
++     * when we return the string from the recursive parse.
++     * (TBD: this probably means we should be initialising lexflags
++     * more consistently.)
++     *
++     * Note that in that case we're still using the ZLE line reading
++     * function at the history layer --- this is consistent with the
++     * intention of maintaining the history and input layers across
++     * the recursive parsing.
++     */
++    lexflags &= ~LEXFLAGS_ZLE;
+ 
+     if (!parse_event(OUTPAR) || tok != OUTPAR)
+ 	lexstop = 1;
+@@ -2111,4 +2203,5 @@ skipcomm(void)
+     infor = save_infor;
+ 
+     return lexstop;
++#endif
+ }
+-- 
+2.5.5
+
+
+From ad64470d3ea4190cd854aab2bc0f8d01ec6aef11 Mon Sep 17 00:00:00 2001
+From: Peter Stephenson <p.w.stephenson@ntlworld.com>
+Date: Fri, 16 Jan 2015 20:12:40 +0000
+Subject: [PATCH 7/8] 32413: turn off history word marking in cmd subst
+
+Upstream-commit: f2a2f28f7bde196cd1fa205ac0c20336046cf2cf
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/hist.c | 22 ++++++++++++++++++++--
+ Src/lex.c  |  2 ++
+ 2 files changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/Src/hist.c b/Src/hist.c
+index 561e2ac..e29a566 100644
+--- a/Src/hist.c
++++ b/Src/hist.c
+@@ -131,6 +131,8 @@ mod_export int hist_skip_flags;
+ /* Bits of histactive variable */
+ #define HA_ACTIVE	(1<<0)	/* History mechanism is active */
+ #define HA_NOINC	(1<<1)	/* Don't store, curhist not incremented */
++#define HA_INWORD       (1<<2)  /* We're inside a word, don't add
++				   start and end markers */
+ 
+ /* Array of word beginnings and endings in current history line. */
+ 
+@@ -219,6 +221,22 @@ static int histsave_stack_pos = 0;
+ 
+ static zlong histfile_linect;
+ 
++/*
++ * Mark that the current level of history is or is not
++ * within a word, whatever turns up.  This is used for nested
++ * parsing of substitutions.
++ */
++
++/**/
++void
++hist_in_word(int yesno)
++{
++    if (yesno)
++	histactive |= HA_INWORD;
++    else
++	histactive &= ~HA_INWORD;
++}
++
+ /* add a character to the current history word */
+ 
+ static void
+@@ -1329,7 +1347,7 @@ int hwgetword = -1;
+ void
+ ihwbegin(int offset)
+ {
+-    if (stophist == 2)
++    if (stophist == 2 || (histactive & HA_INWORD))
+ 	return;
+     if (chwordpos%2)
+ 	chwordpos--;	/* make sure we're on a word start, not end */
+@@ -1349,7 +1367,7 @@ ihwbegin(int offset)
+ void
+ ihwend(void)
+ {
+-    if (stophist == 2)
++    if (stophist == 2 || (histactive & HA_INWORD))
+ 	return;
+     if (chwordpos%2 && chline) {
+ 	/* end of word reached and we've already begun a word */
+diff --git a/Src/lex.c b/Src/lex.c
+index f43b92b..f1aa85d 100644
+--- a/Src/lex.c
++++ b/Src/lex.c
+@@ -2114,6 +2114,7 @@ skipcomm(void)
+ 	new_bsiz = bsiz;
+ 
+ 	lexsave_partial(ZCONTEXT_LEX|ZCONTEXT_PARSE);
++	hist_in_word(1);
+     } else {
+ 	/*
+ 	 * Set up for nested command subsitution, however
+@@ -2195,6 +2196,7 @@ skipcomm(void)
+ 	len = new_len;
+ 	bsiz = new_bsiz;
+ 	lexstop = new_lexstop;
++	hist_in_word(0);
+     }
+ 
+     if (!lexstop)
+-- 
+2.5.5
+
+
+From 22b063c5f2bb3350c856215e436a62d25440e605 Mon Sep 17 00:00:00 2001
+From: Peter Stephenson <p.w.stephenson@ntlworld.com>
+Date: Sun, 18 Jan 2015 16:43:26 +0000
+Subject: [PATCH 8/8] 34319: fix alias expansion in history for command
+ substitution
+
+Upstream-commit: e34ce85151dcd5ac698e116a6742d481ff64ae2c
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/hist.c | 26 ++++++++++++++++++++------
+ 1 file changed, 20 insertions(+), 6 deletions(-)
+
+diff --git a/Src/hist.c b/Src/hist.c
+index e29a566..08763fe 100644
+--- a/Src/hist.c
++++ b/Src/hist.c
+@@ -243,7 +243,16 @@ static void
+ ihwaddc(int c)
+ {
+     /* Only if history line exists and lexing has not finished. */
+-    if (chline && !(errflag || lexstop)) {
++    if (chline && !(errflag || lexstop) &&
++	/*
++	 * If we're reading inside a word for command substitution
++	 * we allow the lexer to expand aliases but don't deal
++	 * with them here.  Note matching code in ihungetc().
++	 * TBD: it might be neater to deal with all aliases in this
++	 * fashion as we never need the expansion in the history
++	 * line, only in the lexer and above.
++	 */
++	!((histactive & HA_INWORD) && (inbufflags & INP_ALIAS))) {
+ 	/* Quote un-expanded bangs in the history line. */
+ 	if (c == bangchar && stophist < 2 && qbang)
+ 	    /* If qbang is not set, we do not escape this bangchar as it's *
+@@ -798,11 +807,16 @@ ihungetc(int c)
+ 	    zlemetall--;
+ 	    exlast++;
+ 	}
+-	DPUTS(hptr <= chline, "BUG: hungetc attempted at buffer start");
+-	hptr--;
+-	DPUTS(*hptr != (char) c, "BUG: wrong character in hungetc() ");
+-	qbang = (c == bangchar && stophist < 2 &&
+-		 hptr > chline && hptr[-1] == '\\');
++	if (!(histactive & HA_INWORD) || !(inbufflags & INP_ALIAS)) {
++	    DPUTS(hptr <= chline, "BUG: hungetc attempted at buffer start");
++	    hptr--;
++	    DPUTS(*hptr != (char) c, "BUG: wrong character in hungetc() ");
++	    qbang = (c == bangchar && stophist < 2 &&
++		     hptr > chline && hptr[-1] == '\\');
++	} else {
++	    /* No active bangs in aliases */
++	    qbang = 0;
++	}
+ 	if (doit)
+ 	    inungetc(c);
+ 	if (!qbang)
+-- 
+2.5.5
+

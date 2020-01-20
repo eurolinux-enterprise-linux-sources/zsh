@@ -1,0 +1,56 @@
+From 075bb94e05771e5f7132c35811c0d19d03ceda16 Mon Sep 17 00:00:00 2001
+From: Axel Beckert <abe@deuxchevaux.org>
+Date: Wed, 18 Sep 2013 23:50:04 +0200
+Subject: [PATCH 1/2] 31735: fix off-by-one in completion utility cache code.
+ Was causing crashes in complex completions, particularly with taskwarrior
+
+Upstream-commit: 844e569b632fc032576edc039f793be47fde724e
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/Zle/computil.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Src/Zle/computil.c b/Src/Zle/computil.c
+index cd508d0..2c323ee 100644
+--- a/Src/Zle/computil.c
++++ b/Src/Zle/computil.c
+@@ -2992,7 +2992,7 @@ get_cvdef(char *nam, char **args)
+ 	    return *p;
+ 	} else if (!min || !*p || (*p)->lastt < (*min)->lastt)
+ 	    min = p;
+-    if (i)
++    if (i > 0)
+ 	min = p;
+     if ((new = parse_cvdef(nam, args))) {
+ 	freecvdef(*min);
+-- 
+2.5.5
+
+
+From b5f4eda96e0543693334ccc6ada2f87ab60cd7c7 Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Thu, 19 Sep 2013 07:55:53 -0700
+Subject: [PATCH 2/2] 31737: same loop counter fix in get_cadef as get_cvdef.
+
+Upstream-commit: 61deff76f22310ce9e10dd2174b8cf8e48c678ee
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/Zle/computil.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Src/Zle/computil.c b/Src/Zle/computil.c
+index 2c323ee..f8983c3 100644
+--- a/Src/Zle/computil.c
++++ b/Src/Zle/computil.c
+@@ -1608,7 +1608,7 @@ get_cadef(char *nam, char **args)
+ 	    return *p;
+ 	} else if (!min || !*p || (*p)->lastt < (*min)->lastt)
+ 	    min = p;
+-    if (i)
++    if (i > 0)
+ 	min = p;
+     if ((new = parse_cadef(nam, args))) {
+ 	freecadef(*min);
+-- 
+2.5.5
+

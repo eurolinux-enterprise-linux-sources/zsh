@@ -1,0 +1,41 @@
+From 656bc77fe9eb1c8c3eabcbcda131c3cd4dbb3acd Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Mon, 10 Aug 2015 12:54:05 -0700
+Subject: [PATCH] 36079: do not allow update_job() and its helpers to run the
+ signal queue while we are processing a job exit.
+
+Upstream-commit: 93ca77f8f73bc58041bcbf8e4319b056504806e5
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/signals.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/Src/signals.c b/Src/signals.c
+index 6b8b773..c539063 100644
+--- a/Src/signals.c
++++ b/Src/signals.c
+@@ -485,6 +485,12 @@ wait_for_processes(void)
+ 	    break;
+ 	}
+ 
++	/* This is necessary to be sure queueing_enabled > 0 when
++	 * we enter printjob() from update_job(), so that we don't
++	 * decrement to zero in should_report_time() and improperly
++	 * run other handlers in the middle of processing this one */
++	queue_signals();
++
+ 	/*
+ 	 * Find the process and job containing this pid and
+ 	 * update it.
+@@ -528,6 +534,8 @@ wait_for_processes(void)
+ 	if (jn && !(jn->stat & (STAT_CURSH|STAT_BUILTIN)) &&
+ 	    jn - jobtab != thisjob)
+ 	    addbgstatus(pid, (int)lastval2);
++
++	unqueue_signals();
+     }
+ }
+ 
+-- 
+2.5.0
+

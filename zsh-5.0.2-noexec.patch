@@ -1,0 +1,59 @@
+From 7e4833e2341463c660655aa76e6a90f455021726 Mon Sep 17 00:00:00 2001
+From: Peter Stephenson <p.w.stephenson@ntlworld.com>
+Date: Fri, 18 Oct 2013 23:42:07 +0100
+Subject: [PATCH 1/2] 31846: fix NOEXEC option in execsimple() optimisation
+
+Upstream-commit: 8879c46a4897a0e347455334fc6b6732c203a220
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/exec.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/Src/exec.c b/Src/exec.c
+index 1ecbc39..51e8d09 100644
+--- a/Src/exec.c
++++ b/Src/exec.c
+@@ -1079,6 +1079,9 @@ execsimple(Estate state)
+     if (errflag)
+ 	return (lastval = 1);
+ 
++    if (!isset(EXECOPT))
++	return lastval = 0;
++
+     /* In evaluated traps, don't modify the line number. */
+     if (!IN_EVAL_TRAP() && !ineval && code)
+ 	lineno = code - 1;
+-- 
+2.1.0
+
+
+From 15500cd645958d2de544e851dabf7010199f7cf9 Mon Sep 17 00:00:00 2001
+From: Peter Stephenson <p.w.stephenson@ntlworld.com>
+Date: Sat, 19 Oct 2013 23:08:24 +0100
+Subject: [PATCH 2/2] Use VERBOSE option in execstring()
+
+Upstream-commit: 9a044f1a6ad4ecfdfeff2f89e1685a1d622cb029
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/exec.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/Src/exec.c b/Src/exec.c
+index 51e8d09..08e4b7d 100644
+--- a/Src/exec.c
++++ b/Src/exec.c
+@@ -1019,6 +1019,11 @@ execstring(char *s, int dont_change_job, int exiting, char *context)
+     Eprog prog;
+ 
+     pushheap();
++    if (isset(VERBOSE)) {
++	zputs(s, stderr);
++	fputc('\n', stderr);
++	fflush(stderr);
++    }
+     if ((prog = parse_string(s, 0)))
+ 	execode(prog, dont_change_job, exiting, context);
+     popheap();
+-- 
+2.1.0
+

@@ -1,0 +1,870 @@
+From bbeb06a37ba58f6905803d32a26fb00953459301 Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Thu, 20 Mar 2014 07:56:30 -0700
+Subject: [PATCH 1/8] 32500: handle interrupts during pattern matching
+
+Upstream-commit: 8672d19f0c0f25569e233bbd466b6c39f60c7a55
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/pattern.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/Src/pattern.c b/Src/pattern.c
+index b74a08a..b93b064 100644
+--- a/Src/pattern.c
++++ b/Src/pattern.c
+@@ -2128,6 +2128,8 @@ pattryrefs(Patprog prog, char *string, int stringlen, int unmetalen,
+ 
+ 	return ret;
+     } else {
++	int q = queue_signal_level();
++
+ 	/*
+ 	 * Test for a `must match' string, unless we're scanning for a match
+ 	 * in which case we don't need to do this each time.
+@@ -2175,6 +2177,8 @@ pattryrefs(Patprog prog, char *string, int stringlen, int unmetalen,
+ 
+ 	patinput = patinstart;
+ 
++	dont_queue_signals();
++
+ 	if (patmatch((Upat)progstr)) {
+ 	    /*
+ 	     * we were lazy and didn't save the globflags if an exclusion
+@@ -2311,6 +2315,8 @@ pattryrefs(Patprog prog, char *string, int stringlen, int unmetalen,
+ 	} else
+ 	    ret = 0;
+ 
++	restore_queue_signals(q);
++
+ 	if (tryalloced)
+ 	    zfree(tryalloced, unmetalen + unmetalenp);
+ 
+@@ -2390,7 +2396,7 @@ patmatch(Upat prog)
+     zrange_t from, to, comp;
+     patint_t nextch;
+ 
+-    while  (scan) {
++    while  (scan && !errflag) {
+ 	next = PATNEXT(scan);
+ 
+ 	if (!globdots && P_NOTDOT(scan) && patinput == patinstart &&
+-- 
+2.5.0
+
+
+From c3eeba82d560005d830862dace8d771e712693e6 Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Sun, 9 Aug 2015 00:50:36 -0700
+Subject: [PATCH 2/8] 36022 fix bug that some loop constructs could not be
+ interrupted, revise signal queueing
+
+There are two underlying ideas here:  (1) Keeping signals queued around
+anything that's doing memory management (including push/pop of the heap)
+has become crucial.  (2) Anytime the shell is going to run a command, be
+it buitin or external, it must be both safe and necessary to process any
+queued signals, so that the apparent order of signal arrival and command
+execution is preserved.
+
+Upstream-commit: 9958684574bf8b0ecec6983cca57f3fa3dd7cd63
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/exec.c    | 43 ++++++++++++++++++++++++++++++++++++++-----
+ Src/init.c    |  5 +++++
+ Src/input.c   |  9 +++++++++
+ Src/loop.c    | 36 ++++++++++++++++++++++++++++++++++--
+ Src/parse.c   |  8 ++++++++
+ Src/signals.c |  8 ++++++--
+ 6 files changed, 100 insertions(+), 9 deletions(-)
+
+diff --git a/Src/exec.c b/Src/exec.c
+index 7817a64..cff1a24 100644
+--- a/Src/exec.c
++++ b/Src/exec.c
+@@ -1108,8 +1108,12 @@ execsimple(Estate state)
+ 	    fflush(xtrerr);
+ 	}
+ 	lv = (errflag ? errflag : cmdoutval);
+-    } else
++    } else {
++	int q = queue_signal_level();
++	dont_queue_signals();
+ 	lv = (execfuncs[code - WC_CURSH])(state, 0);
++	restore_queue_signals(q);
++     }
+ 
+     thisjob = otj;
+ 
+@@ -1141,6 +1145,8 @@ execlist(Estate state, int dont_change_job, int exiting)
+      */
+     int oldnoerrexit = noerrexit;
+ 
++    queue_signals();
++
+     cj = thisjob;
+     old_pline_level = pline_level;
+     old_list_pipe = list_pipe;
+@@ -1391,6 +1397,8 @@ sublist_done:
+ 	/* Make sure this doesn't get executed again. */
+ 	sigtrapped[SIGEXIT] = 0;
+     }
++
++    unqueue_signals();
+ }
+ 
+ /* Execute a pipeline.                                                *
+@@ -1419,6 +1427,14 @@ execpline(Estate state, wordcode slcode, int how, int last1)
+     else if (slflags & WC_SUBLIST_NOT)
+ 	last1 = 0;
+ 
++    /* If trap handlers are allowed to run here, they may start another
++     * external job in the middle of us starting this one, which can
++     * result in jobs being reaped before their job table entries have
++     * been initialized, which in turn leads to waiting forever for
++     * jobs that no longer exist.  So don't do that.
++     */
++    queue_signals();
++
+     pj = thisjob;
+     ipipe[0] = ipipe[1] = opipe[0] = opipe[1] = 0;
+     child_block();
+@@ -1431,6 +1447,7 @@ execpline(Estate state, wordcode slcode, int how, int last1)
+      */
+     if ((thisjob = newjob = initjob()) == -1) {
+ 	child_unblock();
++	unqueue_signals();
+ 	return 1;
+     }
+     if (how & Z_TIMED)
+@@ -1486,6 +1503,7 @@ execpline(Estate state, wordcode slcode, int how, int last1)
+ 	else
+ 	    spawnjob();
+ 	child_unblock();
++	unqueue_signals();
+ 	/* Executing background code resets shell status */
+ 	return lastval = 0;
+     } else {
+@@ -1543,15 +1561,18 @@ execpline(Estate state, wordcode slcode, int how, int last1)
+ 		}
+ 		if (!(jn->stat & STAT_LOCKED)) {
+ 		    updated = hasprocs(thisjob);
+-		    waitjobs();
++		    waitjobs();		/* deals with signal queue */
+ 		    child_block();
+ 		} else
+ 		    updated = 0;
+ 		if (!updated &&
+ 		    list_pipe_job && hasprocs(list_pipe_job) &&
+ 		    !(jobtab[list_pipe_job].stat & STAT_STOPPED)) {
++		    int q = queue_signal_level();
+ 		    child_unblock();
++		    dont_queue_signals();
+ 		    child_block();
++		    restore_queue_signals(q);
+ 		}
+ 		if (list_pipe_child &&
+ 		    jn->stat & STAT_DONE &&
+@@ -1631,6 +1652,7 @@ execpline(Estate state, wordcode slcode, int how, int last1)
+ 		    break;
+ 	    }
+ 	    child_unblock();
++	    unqueue_signals();
+ 
+ 	    if (list_pipe && (lastval & 0200) && pj >= 0 &&
+ 		(!(jn->stat & STAT_INUSE) || (jn->stat & STAT_DONE))) {
+@@ -3192,6 +3214,7 @@ execcmd(Estate state, int input, int output, int how, int last1)
+ 	    fflush(xtrerr);
+ 	}
+     } else if (isset(EXECOPT) && !errflag) {
++	int q = queue_signal_level();
+ 	/*
+ 	 * We delay the entersubsh() to here when we are exec'ing
+ 	 * the current shell (including a fake exec to run a builtin then
+@@ -3210,7 +3233,9 @@ execcmd(Estate state, int input, int output, int how, int last1)
+ 	if (type >= WC_CURSH) {
+ 	    if (last1 == 1)
+ 		do_exec = 1;
++	    dont_queue_signals();
+ 	    lastval = (execfuncs[type - WC_CURSH])(state, do_exec);
++	    restore_queue_signals(q);
+ 	} else if (is_builtin || is_shfunc) {
+ 	    LinkList restorelist = 0, removelist = 0;
+ 	    /* builtin or shell function */
+@@ -3269,7 +3294,9 @@ execcmd(Estate state, int input, int output, int how, int last1)
+ 		/* It's a builtin */
+ 		if (forked)
+ 		    closem(FDT_INTERNAL);
++		dont_queue_signals();
+ 		lastval = execbuiltin(args, (Builtin) hn);
++		restore_queue_signals(q);
+ #ifdef PATH_DEV_FD
+ 		closem(FDT_PROC_SUBST);
+ #endif
+@@ -4415,11 +4442,9 @@ execshfunc(Shfunc shf, LinkList args)
+     if ((osfc = sfcontext) == SFC_NONE)
+ 	sfcontext = SFC_DIRECT;
+     xtrerr = stderr;
+-    unqueue_signals();
+ 
+     doshfunc(shf, args, 0);
+ 
+-    queue_signals();
+     sfcontext = osfc;
+     free(cmdstack);
+     cmdstack = ocs;
+@@ -4614,6 +4639,8 @@ doshfunc(Shfunc shfunc, LinkList doshargs, int noreturnval)
+     static int funcdepth;
+ #endif
+ 
++    queue_signals();	/* Lots of memory and global state changes coming */
++
+     pushheap();
+ 
+     oargv0 = NULL;
+@@ -4814,6 +4841,8 @@ doshfunc(Shfunc shfunc, LinkList doshargs, int noreturnval)
+     }
+     popheap();
+ 
++    unqueue_signals();
++
+     if (exit_pending) {
+ 	if (locallevel > forklevel) {
+ 	    /* Still functions to return: force them to do so. */
+@@ -4844,6 +4873,8 @@ runshfunc(Eprog prog, FuncWrap wrap, char *name)
+     int cont, ouu;
+     char *ou;
+ 
++    queue_signals();
++
+     ou = zalloc(ouu = underscoreused);
+     if (ou)
+ 	memcpy(ou, zunderscore, underscoreused);
+@@ -4865,12 +4896,14 @@ runshfunc(Eprog prog, FuncWrap wrap, char *name)
+ 	wrap = wrap->next;
+     }
+     startparamscope();
+-    execode(prog, 1, 0, "shfunc");
++    execode(prog, 1, 0, "shfunc");	/* handles signal unqueueing */
+     if (ou) {
+ 	setunderscore(ou);
+ 	zfree(ou, ouu);
+     }
+     endparamscope();
++
++    unqueue_signals();
+ }
+ 
+ /* Search fpath for an undefined function.  Finds the file, and returns the *
+diff --git a/Src/init.c b/Src/init.c
+index 78f171d..df42349 100644
+--- a/Src/init.c
++++ b/Src/init.c
+@@ -105,6 +105,7 @@ loop(int toplevel, int justonce)
+     Eprog prog;
+     int err, non_empty = 0;
+ 
++    queue_signals();
+     pushheap();
+     if (!toplevel)
+ 	lexsave();
+@@ -118,7 +119,9 @@ loop(int toplevel, int justonce)
+ 	    if (interact && toplevel) {
+ 	        int hstop = stophist;
+ 		stophist = 3;
++		unqueue_signals();
+ 		preprompt();
++		queue_signals();
+ 		if (stophist != 3)
+ 		    hbegin(1);
+ 		else
+@@ -197,6 +200,7 @@ loop(int toplevel, int justonce)
+ 	if (((!interact || sourcelevel) && errflag) || retflag)
+ 	    break;
+ 	if (isset(SINGLECOMMAND) && toplevel) {
++	    dont_queue_signals();
+ 	    if (sigtrapped[SIGEXIT])
+ 		dotrap(SIGEXIT);
+ 	    exit(lastval);
+@@ -208,6 +212,7 @@ loop(int toplevel, int justonce)
+     if (!toplevel)
+ 	lexrestore();
+     popheap();
++    unqueue_signals();
+ 
+     if (err)
+ 	return LOOP_ERROR;
+diff --git a/Src/input.c b/Src/input.c
+index 5b782dc..dcff78a 100644
+--- a/Src/input.c
++++ b/Src/input.c
+@@ -140,14 +140,17 @@ shingetline(void)
+     int c;
+     char buf[BUFSIZ];
+     char *p;
++    int q = queue_signal_level();
+ 
+     p = buf;
+     for (;;) {
++	dont_queue_signals();
+ 	do {
+ 	    errno = 0;
+ 	    c = fgetc(bshin);
+ 	} while (c < 0 && errno == EINTR);
+ 	if (c < 0 || c == '\n') {
++	    restore_queue_signals(q);
+ 	    if (c == '\n')
+ 		*p++ = '\n';
+ 	    if (p > buf) {
+@@ -163,11 +166,13 @@ shingetline(void)
+ 	} else
+ 	    *p++ = c;
+ 	if (p >= buf + BUFSIZ - 1) {
++	    queue_signals();
+ 	    line = zrealloc(line, ll + (p - buf) + 1);
+ 	    memcpy(line + ll, buf, p - buf);
+ 	    ll += p - buf;
+ 	    line[ll] = '\0';
+ 	    p = buf;
++	    unqueue_signals();
+ 	}
+     }
+ }
+@@ -340,6 +345,8 @@ inputline(void)
+ static void
+ inputsetline(char *str, int flags)
+ {
++    queue_signals();
++
+     if ((inbufflags & INP_FREE) && inbuf) {
+ 	free(inbuf);
+     }
+@@ -357,6 +364,8 @@ inputsetline(char *str, int flags)
+     else
+ 	inbufct = inbufleft;
+     inbufflags = flags;
++
++    unqueue_signals();
+ }
+ 
+ /*
+diff --git a/Src/loop.c b/Src/loop.c
+index 90a0761..0c07c73 100644
+--- a/Src/loop.c
++++ b/Src/loop.c
+@@ -56,6 +56,10 @@ execfor(Estate state, int do_exec)
+     char *name, *str, *cond = NULL, *advance = NULL;
+     zlong val = 0;
+     LinkList vars = NULL, args = NULL;
++    int old_simple_pline = simple_pline;
++
++    /* See comments in execwhile() */
++    simple_pline = 1;
+ 
+     end = state->pc + WC_FOR_SKIP(code);
+ 
+@@ -73,6 +77,7 @@ execfor(Estate state, int do_exec)
+ 	    matheval(str);
+ 	if (errflag) {
+ 	    state->pc = end;
++	    simple_pline = old_simple_pline;
+ 	    return lastval = errflag;
+ 	}
+ 	cond = ecgetstr(state, EC_NODUP, &ctok);
+@@ -85,6 +90,7 @@ execfor(Estate state, int do_exec)
+ 
+ 	    if (!(args = ecgetlist(state, *state->pc++, EC_DUPTOK, &htok))) {
+ 		state->pc = end;
++		simple_pline = old_simple_pline;
+ 		return 0;
+ 	    }
+ 	    if (htok)
+@@ -190,6 +196,7 @@ execfor(Estate state, int do_exec)
+     popheap();
+     cmdpop();
+     loops--;
++    simple_pline = old_simple_pline;
+     state->pc = end;
+     return lastval;
+ }
+@@ -206,6 +213,10 @@ execselect(Estate state, UNUSED(int do_exec))
+     FILE *inp;
+     size_t more;
+     LinkList args;
++    int old_simple_pline = simple_pline;
++
++    /* See comments in execwhile() */
++    simple_pline = 1;
+ 
+     end = state->pc + WC_FOR_SKIP(code);
+     name = ecgetstr(state, EC_NODUP, NULL);
+@@ -221,6 +232,7 @@ execselect(Estate state, UNUSED(int do_exec))
+ 
+ 	if (!(args = ecgetlist(state, *state->pc++, EC_DUPTOK, &htok))) {
+ 	    state->pc = end;
++	    simple_pline = old_simple_pline;
+ 	    return 0;
+ 	}
+ 	if (htok)
+@@ -228,6 +240,7 @@ execselect(Estate state, UNUSED(int do_exec))
+     }
+     if (!args || empty(args)) {
+ 	state->pc = end;
++	simple_pline = old_simple_pline;
+ 	return 1;
+     }
+     loops++;
+@@ -301,6 +314,7 @@ execselect(Estate state, UNUSED(int do_exec))
+     popheap();
+     fclose(inp);
+     loops--;
++    simple_pline = old_simple_pline;
+     state->pc = end;
+     return lastval;
+ }
+@@ -368,6 +382,7 @@ execwhile(Estate state, UNUSED(int do_exec))
+     Wordcode end, loop;
+     wordcode code = state->pc[-1];
+     int olderrexit, oldval, isuntil = (WC_WHILE_TYPE(code) == WC_WHILE_UNTIL);
++    int old_simple_pline = simple_pline;
+ 
+     end = state->pc + WC_WHILE_SKIP(code);
+     olderrexit = noerrexit;
+@@ -382,8 +397,6 @@ execwhile(Estate state, UNUSED(int do_exec))
+         /* This is an empty loop.  Make sure the signal handler sets the
+         * flags and then just wait for someone hitting ^C. */
+ 
+-        int old_simple_pline = simple_pline;
+-
+         simple_pline = 1;
+ 
+         while (!breaks)
+@@ -395,7 +408,14 @@ execwhile(Estate state, UNUSED(int do_exec))
+         for (;;) {
+             state->pc = loop;
+             noerrexit = 1;
++
++	    /* In case the test condition is a functional no-op,
++	     * make sure signal handlers recognize ^C to end the loop. */
++	    simple_pline = 1;
++
+             execlist(state, 1, 0);
++
++	    simple_pline = old_simple_pline;
+             noerrexit = olderrexit;
+             if (!((lastval == 0) ^ isuntil)) {
+                 if (breaks)
+@@ -407,7 +427,14 @@ execwhile(Estate state, UNUSED(int do_exec))
+                 lastval = oldval;
+                 break;
+             }
++
++	    /* In case the loop body is also a functional no-op,
++	     * make sure signal handlers recognize ^C as above. */
++	    simple_pline = 1;
++
+             execlist(state, 1, 0);
++
++	    simple_pline = old_simple_pline;
+             if (breaks) {
+                 breaks--;
+                 if (breaks || !contflag)
+@@ -438,6 +465,10 @@ execrepeat(Estate state, UNUSED(int do_exec))
+     wordcode code = state->pc[-1];
+     int count, htok = 0;
+     char *tmp;
++    int old_simple_pline = simple_pline;
++
++    /* See comments in execwhile() */
++    simple_pline = 1;
+ 
+     end = state->pc + WC_REPEAT_SKIP(code);
+ 
+@@ -470,6 +501,7 @@ execrepeat(Estate state, UNUSED(int do_exec))
+     cmdpop();
+     popheap();
+     loops--;
++    simple_pline = old_simple_pline;
+     state->pc = end;
+     return lastval;
+ }
+diff --git a/Src/parse.c b/Src/parse.c
+index b0a7624..04d2707 100644
+--- a/Src/parse.c
++++ b/Src/parse.c
+@@ -379,6 +379,8 @@ init_parse_status(void)
+ void
+ init_parse(void)
+ {
++    queue_signals();
++
+     if (ecbuf) zfree(ecbuf, eclen);
+ 
+     ecbuf = (Wordcode) zalloc((eclen = EC_INIT_SIZE) * sizeof(wordcode));
+@@ -389,6 +391,8 @@ init_parse(void)
+     ecnfunc = 0;
+ 
+     init_parse_status();
++
++    unqueue_signals();
+ }
+ 
+ /* Build eprog. */
+@@ -409,6 +413,8 @@ bld_eprog(void)
+     Eprog ret;
+     int l;
+ 
++    queue_signals();
++
+     ecadd(WCB_END());
+ 
+     ret = (Eprog) zhalloc(sizeof(*ret));
+@@ -431,6 +437,8 @@ bld_eprog(void)
+     zfree(ecbuf, eclen);
+     ecbuf = NULL;
+ 
++    unqueue_signals();
++
+     return ret;
+ }
+ 
+diff --git a/Src/signals.c b/Src/signals.c
+index c539063..73b41b1 100644
+--- a/Src/signals.c
++++ b/Src/signals.c
+@@ -1194,6 +1194,8 @@ dotrapargs(int sig, int *sigtr, void *sigfn)
+ 	}
+     }
+ 
++    queue_signals();	/* Any time we manage memory or global state */
++
+     intrap++;
+     *sigtr |= ZSIG_IGNORED;
+ 
+@@ -1231,7 +1233,7 @@ dotrapargs(int sig, int *sigtr, void *sigfn)
+ 
+ 	sfcontext = SFC_SIGNAL;
+ 	incompfunc = 0;
+-	doshfunc((Shfunc)sigfn, args, 1);
++	doshfunc((Shfunc)sigfn, args, 1);	/* manages signal queueing */
+ 	sfcontext = osc;
+ 	incompfunc= old_incompfunc;
+ 	freelinklist(args, (FreeFunc) NULL);
+@@ -1241,7 +1243,7 @@ dotrapargs(int sig, int *sigtr, void *sigfn)
+ 	trap_state = TRAP_STATE_PRIMED;
+ 	trapisfunc = isfunc = 0;
+ 
+-	execode((Eprog)sigfn, 1, 0, "trap");
++	execode((Eprog)sigfn, 1, 0, "trap");	/* manages signal queueing */
+     }
+     runhookdef(AFTERTRAPHOOK, NULL);
+ 
+@@ -1286,6 +1288,8 @@ dotrapargs(int sig, int *sigtr, void *sigfn)
+     if (*sigtr != ZSIG_IGNORED)
+ 	*sigtr &= ~ZSIG_IGNORED;
+     intrap--;
++
++    unqueue_signals();
+ }
+ 
+ /* Standard call to execute a trap for a given signal. */
+-- 
+2.5.0
+
+
+From 33905958a1b94e83ca1c32bc6849906da94b91a6 Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Sun, 9 Aug 2015 17:37:23 -0700
+Subject: [PATCH 3/8] 36033: a few more queue_signals() to protect global state
+ changes
+
+Upstream-commit: df5f825538720a9422859200d58d075d1dd075fc
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/glob.c    | 4 ++++
+ Src/pattern.c | 8 +++++++-
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/Src/glob.c b/Src/glob.c
+index ca2ffaf..9135fce 100644
+--- a/Src/glob.c
++++ b/Src/glob.c
+@@ -213,22 +213,26 @@ static struct globdata curglobdata;
+ 
+ #define save_globstate(N) \
+   do { \
++    queue_signals(); \
+     memcpy(&(N), &curglobdata, sizeof(struct globdata)); \
+     (N).gd_pathpos = pathpos; \
+     (N).gd_pathbuf = pathbuf; \
+     (N).gd_glob_pre = glob_pre; \
+     (N).gd_glob_suf = glob_suf; \
+     pathbuf = NULL; \
++    unqueue_signals(); \
+   } while (0)
+ 
+ #define restore_globstate(N) \
+   do { \
++    queue_signals(); \
+     zfree(pathbuf, pathbufsz); \
+     memcpy(&curglobdata, &(N), sizeof(struct globdata)); \
+     pathpos = (N).gd_pathpos; \
+     pathbuf = (N).gd_pathbuf; \
+     glob_pre = (N).gd_glob_pre; \
+     glob_suf = (N).gd_glob_suf; \
++    unqueue_signals(); \
+   } while (0)
+ 
+ /* pathname component in filename patterns */
+diff --git a/Src/pattern.c b/Src/pattern.c
+index b74a08a..52774c0 100644
+--- a/Src/pattern.c
++++ b/Src/pattern.c
+@@ -452,6 +452,8 @@ patcompile(char *exp, int inflags, char **endexp)
+     char *lng, *strp = NULL;
+     Patprog p;
+ 
++    queue_signals();
++
+     startoff = sizeof(struct patprog);
+     /* Ensure alignment of start of program string */
+     startoff = (startoff + sizeof(union upat) - 1) & ~(sizeof(union upat) - 1);
+@@ -521,8 +523,10 @@ patcompile(char *exp, int inflags, char **endexp)
+ 	if (!strp || (*strp && *strp != '/')) {
+ 	    /* No, do normal compilation. */
+ 	    strp = NULL;
+-	    if (patcompswitch(0, &flags) == 0)
++	    if (patcompswitch(0, &flags) == 0) {
++		unqueue_signals();
+ 		return NULL;
++	    }
+ 	} else {
+ 	    /*
+ 	     * Yes, copy the string, and skip compilation altogether.
+@@ -654,6 +658,8 @@ patcompile(char *exp, int inflags, char **endexp)
+ 
+     if (endexp)
+ 	*endexp = patparse;
++
++    unqueue_signals();
+     return p;
+ }
+ 
+-- 
+2.5.0
+
+
+From bba38460c88c36fb529ee7494570cb2cfc68641a Mon Sep 17 00:00:00 2001
+From: Peter Stephenson <pws@zsh.org>
+Date: Mon, 10 Aug 2015 16:59:55 +0100
+Subject: [PATCH 4/8] Don't rely on implicit value when saving background
+ process status
+
+Upstream-commit: a07f74fadd1180b42258d1fcec5359afe3f9ba00
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/signals.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/Src/signals.c b/Src/signals.c
+index 73b41b1..2e7304f 100644
+--- a/Src/signals.c
++++ b/Src/signals.c
+@@ -533,7 +533,14 @@ wait_for_processes(void)
+ 	 */
+ 	if (jn && !(jn->stat & (STAT_CURSH|STAT_BUILTIN)) &&
+ 	    jn - jobtab != thisjob)
+-	    addbgstatus(pid, (int)lastval2);
++	{
++	    int val = (WIFSIGNALED(status) ?
++		   0200 | WTERMSIG(status) :
++		   (WIFSTOPPED(status) ?
++		    0200 | WEXITSTATUS(status) :
++		    WEXITSTATUS(status)));
++	    addbgstatus(pid, val);
++	}
+ 
+ 	unqueue_signals();
+     }
+-- 
+2.5.0
+
+
+From 530b59d58273c9f11cd1443c0865f6420eafcbf0 Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Tue, 11 Aug 2015 08:44:15 -0700
+Subject: [PATCH 5/8] 36090: keep signals queued for preprompt()
+
+Upstream-commit: 1af2e6e02d5cb8ca8d11f107b670cddfd10a7e81
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/init.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/Src/init.c b/Src/init.c
+index df42349..ca616d3 100644
+--- a/Src/init.c
++++ b/Src/init.c
+@@ -119,9 +119,7 @@ loop(int toplevel, int justonce)
+ 	    if (interact && toplevel) {
+ 	        int hstop = stophist;
+ 		stophist = 3;
+-		unqueue_signals();
+ 		preprompt();
+-		queue_signals();
+ 		if (stophist != 3)
+ 		    hbegin(1);
+ 		else
+-- 
+2.5.0
+
+
+From b2994c9f3ef36c3ee3286a08736da1e2c8d65f0b Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Tue, 11 Aug 2015 08:53:12 -0700
+Subject: [PATCH 6/8] 36104: change order of child_block() and
+ dont_queue_signals() to resolve yet another race condition
+
+Upstream-commit: 128bf385b1e8256e412d732fa9b80ecd7c5e2c73
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/exec.c | 2 +-
+ Src/jobs.c | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/Src/exec.c b/Src/exec.c
+index cff1a24..70e2279 100644
+--- a/Src/exec.c
++++ b/Src/exec.c
+@@ -1570,8 +1570,8 @@ execpline(Estate state, wordcode slcode, int how, int last1)
+ 		    !(jobtab[list_pipe_job].stat & STAT_STOPPED)) {
+ 		    int q = queue_signal_level();
+ 		    child_unblock();
+-		    dont_queue_signals();
+ 		    child_block();
++		    dont_queue_signals();
+ 		    restore_queue_signals(q);
+ 		}
+ 		if (list_pipe_child &&
+diff --git a/Src/jobs.c b/Src/jobs.c
+index 24b8494..e711a9b 100644
+--- a/Src/jobs.c
++++ b/Src/jobs.c
+@@ -1312,9 +1312,9 @@ zwaitjob(int job, int wait_cmd)
+     int q = queue_signal_level();
+     Job jn = jobtab + job;
+ 
+-    dont_queue_signals();
+     child_block();		 /* unblocked during signal_suspend() */
+     queue_traps(wait_cmd);
++    dont_queue_signals();
+     if (jn->procs || jn->auxprocs) { /* if any forks were done         */
+ 	jn->stat |= STAT_LOCKED;
+ 	if (jn->stat & STAT_CHANGED)
+@@ -1350,9 +1350,9 @@ zwaitjob(int job, int wait_cmd)
+ 	pipestats[0] = lastval;
+ 	numpipestats = 1;
+     }
++    restore_queue_signals(q);
+     unqueue_traps();
+     child_unblock();
+-    restore_queue_signals(q);
+ 
+     return 0;
+ }
+-- 
+2.5.0
+
+
+From 6a0fd02f08972875cc138e783e28515a5c7a7e04 Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Sat, 15 Aug 2015 10:15:30 -0700
+Subject: [PATCH 7/8] 36180: avoid infinite job stop/continue loop on "wait
+ PID" for a background job
+
+Upstream-commit: 5d019f426af8b2a600ee03e43782c24b357d1401
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/jobs.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/Src/jobs.c b/Src/jobs.c
+index e711a9b..9b94a1f 100644
+--- a/Src/jobs.c
++++ b/Src/jobs.c
+@@ -1276,10 +1276,17 @@ waitforpid(pid_t pid, int wait_cmd)
+     dont_queue_signals();
+     child_block();		/* unblocked in signal_suspend() */
+     queue_traps(wait_cmd);
++
++    /* This function should never be called with a pid that is not a
++     * child of the current shell.  Consequently, if kill(0, pid)
++     * fails here with ESRCH, the child has already been reaped.  In
++     * the loop body, we expect this to happen in signal_suspend()
++     * via zhandler(), after which this test terminates the loop.
++     */
+     while (!errflag && (kill(pid, 0) >= 0 || errno != ESRCH)) {
+ 	if (first)
+ 	    first = 0;
+-	else
++	else if (!wait_cmd)
+ 	    kill(pid, SIGCONT);
+ 
+ 	last_signal = -1;
+-- 
+2.5.0
+
+
+From d184dd8673c93d35855b4a04613ae09277214df5 Mon Sep 17 00:00:00 2001
+From: "Barton E. Schaefer" <schaefer@zsh.org>
+Date: Wed, 2 Sep 2015 19:11:54 -0700
+Subject: [PATCH 8/8] 36393: process queued signals during dotrap()
+
+Upstream-commit: 9f5dffa1f33ec43c306bdf3c87cebba5fcc95b64
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/signals.c          | 5 +++++
+ Test/A05execution.ztst | 9 +++++++++
+ 2 files changed, 14 insertions(+)
+
+diff --git a/Src/signals.c b/Src/signals.c
+index 2e7304f..dbc84af 100644
+--- a/Src/signals.c
++++ b/Src/signals.c
+@@ -1306,6 +1306,7 @@ void
+ dotrap(int sig)
+ {
+     void *funcprog;
++    int q = queue_signal_level();
+ 
+     if (sigtrapped[sig] & ZSIG_FUNC) {
+ 	HashNode hn = gettrapnode(sig, 0);
+@@ -1328,5 +1329,9 @@ dotrap(int sig)
+     if ((sigtrapped[sig] & ZSIG_IGNORED) || !funcprog || errflag)
+ 	return;
+ 
++    dont_queue_signals();
++
+     dotrapargs(sig, sigtrapped+sig, funcprog);
++
++    restore_queue_signals(q);
+ }
+diff --git a/Test/A05execution.ztst b/Test/A05execution.ztst
+index 77c569c..3b39c75 100644
+--- a/Test/A05execution.ztst
++++ b/Test/A05execution.ztst
+@@ -203,3 +203,12 @@
+ 1:The status of recently exited background jobs is recorded
+ >3
+ >2
++
++# Regression test for workers/36392
++  print -u $ZTST_fd 'This test takes 3 seconds and hangs the shell when it fails...'
++  callfromchld() { true && { print CHLD } }
++  TRAPCHLD() { callfromchld }
++  sleep 2 & sleep 3; print OK
++0:Background job exit does not affect reaping foreground job
++>CHLD
++>OK
+-- 
+2.5.0
+
