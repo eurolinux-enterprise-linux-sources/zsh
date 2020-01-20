@@ -3,7 +3,7 @@
 Summary: Powerful interactive shell
 Name: zsh
 Version: 5.0.2
-Release: 28%{?dist}
+Release: 31%{?dist}
 License: MIT
 URL: http://zsh.sourceforge.net/
 Group: System Environment/Shells
@@ -76,6 +76,33 @@ Patch22: zsh-5.0.2-noexec-subscript.patch
 # zero new space allocated in prompt buffer (#1408619)
 Patch23: zsh-5.0.2-initialize-prompt-buffer.patch
 
+# fix crash while inputting long multi-line strings (#1492595)
+Patch24: zsh-5.0.2-freeheap-crash.patch
+
+# fix buffer overflow for very long fds in >& fd syntax (CVE-2014-10071)
+Patch33: zsh-5.0.2-CVE-2014-10071.patch
+
+# fix buffer overflow when scanning very long path for symlinks (CVE-2014-10072)
+Patch34: zsh-5.0.2-CVE-2014-10072.patch
+
+# fix NULL dereference in cd (CVE-2017-18205)
+Patch35: zsh-5.0.2-CVE-2017-18205.patch
+
+# fix buffer overrun in xsymlinks (CVE-2017-18206)
+Patch36: zsh-5.0.2-CVE-2017-18206.patch
+
+# avoid crash when copying empty hash table (CVE-2018-7549)
+Patch37: zsh-5.0.2-CVE-2018-7549.patch
+
+# fix stack-based buffer overflow in exec.c:hashcmd() (CVE-2018-1071)
+Patch38: zsh-5.0.2-CVE-2018-1071.patch
+
+# fix stack-based buffer overflow in gen_matches_files() (CVE-2018-1083)
+Patch39: zsh-5.0.2-CVE-2018-1083.patch
+
+# fix stack-based buffer overflow in utils.c:checkmailpath() (CVE-2018-1100)
+Patch40: zsh-5.0.2-CVE-2018-1100.patch
+
 BuildRequires: coreutils sed ncurses-devel libcap-devel
 BuildRequires: texinfo texi2html gawk hostname
 Requires(post): /sbin/install-info grep
@@ -129,6 +156,15 @@ This package contains the Zsh manual in html format.
 %patch21 -p1
 %patch22 -p1
 %patch23 -p1
+%patch24 -p1
+%patch33 -p1
+%patch34 -p1
+%patch35 -p1
+%patch36 -p1
+%patch37 -p1
+%patch38 -p1
+%patch39 -p1
+%patch40 -p1
 
 cp -p %SOURCE7 .
 
@@ -245,6 +281,22 @@ fi
 %doc Doc/*.html
 
 %changelog
+* Fri May 04 2018 Kamil Dudka <kdudka@redhat.com> - 5.0.2-31
+- fix defects detected by Coverity related to CVE-2017-18206 and CVE-2018-1083
+
+* Thu May 03 2018 Kamil Dudka <kdudka@redhat.com> - 5.0.2-30
+- fix stack-based buffer overflow in utils.c:checkmailpath() (CVE-2018-1100)
+- fix stack-based buffer overflow in gen_matches_files() (CVE-2018-1083)
+- fix stack-based buffer overflow in exec.c:hashcmd() (CVE-2018-1071)
+- avoid crash when copying empty hash table (CVE-2018-7549)
+- fix buffer overrun in xsymlinks (CVE-2017-18206)
+- fix NULL dereference in cd (CVE-2017-18205)
+- fix buffer overflow when scanning very long path for symlinks (CVE-2014-10072)
+- fix buffer overflow for very long fds in >& fd syntax (CVE-2014-10071)
+
+* Tue Sep 19 2017 Kamil Dudka <kdudka@redhat.com> - 5.0.2-29
+- fix crash while inputting long multi-line strings (#1492595)
+
 * Thu Feb 16 2017 Kamil Dudka <kdudka@redhat.com> - 5.0.2-28
 - zero new space allocated in prompt buffer (#1408619)
 
