@@ -3,7 +3,7 @@
 Summary: Powerful interactive shell
 Name: zsh
 Version: 5.0.2
-Release: 31%{?dist}
+Release: 33%{?dist}
 License: MIT
 URL: http://zsh.sourceforge.net/
 Group: System Environment/Shells
@@ -103,6 +103,9 @@ Patch39: zsh-5.0.2-CVE-2018-1083.patch
 # fix stack-based buffer overflow in utils.c:checkmailpath() (CVE-2018-1100)
 Patch40: zsh-5.0.2-CVE-2018-1100.patch
 
+# fix improper handling of shebang line longer than 64 bytes (CVE-2018-13259)
+Patch41: zsh-5.0.2-CVE-2018-13259.patch
+
 BuildRequires: coreutils sed ncurses-devel libcap-devel
 BuildRequires: texinfo texi2html gawk hostname
 Requires(post): /sbin/install-info grep
@@ -165,6 +168,7 @@ This package contains the Zsh manual in html format.
 %patch38 -p1
 %patch39 -p1
 %patch40 -p1
+%patch41 -p1
 
 cp -p %SOURCE7 .
 
@@ -281,6 +285,12 @@ fi
 %doc Doc/*.html
 
 %changelog
+* Mon Mar 04 2019 Kamil Dudka <kdudka@redhat.com> - 5.0.2-33
+- fix regression in oh-my-zsh vcs_info hooks introduced in -30 (#1677696)
+
+* Fri Nov 09 2018 Kamil Dudka <kdudka@redhat.com> - 5.0.2-32
+- fix improper handling of shebang line longer than 64 bytes (CVE-2018-13259)
+
 * Fri May 04 2018 Kamil Dudka <kdudka@redhat.com> - 5.0.2-31
 - fix defects detected by Coverity related to CVE-2017-18206 and CVE-2018-1083
 
