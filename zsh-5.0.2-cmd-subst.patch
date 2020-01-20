@@ -1,7 +1,7 @@
 From 6b8f3f9906ee44be46e022480b6e01755feeaa99 Mon Sep 17 00:00:00 2001
 From: Peter Stephenson <pws@zsh.org>
 Date: Tue, 6 Jan 2015 17:05:17 +0000
-Subject: [PATCH 1/8] Fix command substitutions to parse contents as they are
+Subject: [PATCH 1/9] Fix command substitutions to parse contents as they are
  read in.
 
 Do this by refactoring misnamed lexsave()/lexrestore() to allow
@@ -832,7 +832,7 @@ index 5661b0a..a4c69a0 100644
 From 925112048811087520954e0c739b29371eee188a Mon Sep 17 00:00:00 2001
 From: Kamil Dudka <kdudka@redhat.com>
 Date: Thu, 8 Jan 2015 21:39:26 +0000
-Subject: [PATCH 2/8] Resolves: #1338689 - better initialize parser state
+Subject: [PATCH 2/9] Resolves: #1338689 - better initialize parser state
 
 This fix is isolated out from a huge upstream commit that includes major
 code refactoring changes together with the initialization fix actually
@@ -914,7 +914,7 @@ index b0a7624..b3b004b 100644
 From 00bc31b497525433dbaeafd3e7b92c7fe364dc8c Mon Sep 17 00:00:00 2001
 From: Peter Stephenson <pws@zsh.org>
 Date: Wed, 15 Apr 2015 10:20:06 +0100
-Subject: [PATCH 3/8] 34892 (slightly tweaked): math evaluation fix
+Subject: [PATCH 3/9] 34892 (slightly tweaked): math evaluation fix
 
 An empty expression resulting from substitution includes a
 Nularg, which needs handling the same as an empty string.
@@ -978,7 +978,7 @@ index 02d1519..33b03ef 100644
 From 0c1450a286e578a1cfe266bf743faf2f0719f85b Mon Sep 17 00:00:00 2001
 From: "Barton E. Schaefer" <schaefer@zsh.org>
 Date: Wed, 29 Jul 2015 22:36:45 -0700
-Subject: [PATCH 4/8] 35953: fix handling of command substitution in math
+Subject: [PATCH 4/9] 35953: fix handling of command substitution in math
  context
 
 Upstream-commit: c0a80171ee615b52a15a6fc8efe83c2bb53451d2
@@ -1051,7 +1051,7 @@ index f04ddda..584ebd6 100644
 From 821815bd9c24a84d8bb5796732ab6144b35e7d27 Mon Sep 17 00:00:00 2001
 From: Peter Stephenson <p.w.stephenson@ntlworld.com>
 Date: Sat, 10 Jan 2015 20:28:57 +0000
-Subject: [PATCH 5/8] 34220: new $(...) handling needs to back up over alias
+Subject: [PATCH 5/9] 34220: new $(...) handling needs to back up over alias
  expansion
 
 Upstream-commit: 3b32abafdb019cfb8f29908bc3d148e01518981d
@@ -1084,7 +1084,7 @@ index 1579762..5b782dc 100644
 From 1c731b7d1178a2623aa1b986f38a7decebf2c993 Mon Sep 17 00:00:00 2001
 From: Peter Stephenson <pws@zsh.org>
 Date: Fri, 16 Jan 2015 13:20:05 +0000
-Subject: [PATCH 6/8] 34304: improve use of new cmd subst in completion
+Subject: [PATCH 6/9] 34304: improve use of new cmd subst in completion
 
 Upstream-commit: db05cc51fa2298cf128e480d3ac8e5373029f6b9
 Signed-off-by: Kamil Dudka <kdudka@redhat.com>
@@ -1263,7 +1263,7 @@ index f43b92b..45c1117 100644
 From ad64470d3ea4190cd854aab2bc0f8d01ec6aef11 Mon Sep 17 00:00:00 2001
 From: Peter Stephenson <p.w.stephenson@ntlworld.com>
 Date: Fri, 16 Jan 2015 20:12:40 +0000
-Subject: [PATCH 7/8] 32413: turn off history word marking in cmd subst
+Subject: [PATCH 7/9] 32413: turn off history word marking in cmd subst
 
 Upstream-commit: f2a2f28f7bde196cd1fa205ac0c20336046cf2cf
 Signed-off-by: Kamil Dudka <kdudka@redhat.com>
@@ -1353,7 +1353,7 @@ index f43b92b..f1aa85d 100644
 From 22b063c5f2bb3350c856215e436a62d25440e605 Mon Sep 17 00:00:00 2001
 From: Peter Stephenson <p.w.stephenson@ntlworld.com>
 Date: Sun, 18 Jan 2015 16:43:26 +0000
-Subject: [PATCH 8/8] 34319: fix alias expansion in history for command
+Subject: [PATCH 8/9] 34319: fix alias expansion in history for command
  substitution
 
 Upstream-commit: e34ce85151dcd5ac698e116a6742d481ff64ae2c
@@ -1408,4 +1408,268 @@ index e29a566..08763fe 100644
  	if (!qbang)
 -- 
 2.5.5
+
+
+From 155587d13060e4c7c9bbd61b7cc0a6dd17922d56 Mon Sep 17 00:00:00 2001
+From: Peter Stephenson <p.w.stephenson@ntlworld.com>
+Date: Sun, 18 Jan 2015 22:38:57 +0000
+Subject: [PATCH 9/9] 34322: bug with interface to parsestr() etc.
+
+Was showing up in places like ${(e)...} where command substitution
+could reallocate the token string, but actually there was never any
+guarantee that the lexer wouldn't do that, so this was always
+a bit iffy.
+
+Upstream-commit: c6c9f5daf2e196e6ab7346dfbf5f5166a1d87f0c
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/Zle/compctl.c      |  4 ++--
+ Src/Zle/compresult.c   |  3 ++-
+ Src/exec.c             |  9 +++++----
+ Src/init.c             | 11 +++++++----
+ Src/lex.c              | 30 +++++++++++++++++++++---------
+ Src/params.c           |  3 ++-
+ Src/prompt.c           |  2 +-
+ Src/subst.c            |  8 +++++---
+ Src/utils.c            |  2 +-
+ Test/D04parameter.ztst |  7 +++++++
+ 10 files changed, 53 insertions(+), 26 deletions(-)
+
+diff --git a/Src/Zle/compctl.c b/Src/Zle/compctl.c
+index 0143370..5d67137 100644
+--- a/Src/Zle/compctl.c
++++ b/Src/Zle/compctl.c
+@@ -3854,7 +3854,7 @@ makecomplistflags(Compctl cc, char *s, int incmd, int compadd)
+ 	    yaptr = get_user_var(uv);
+ 	if ((tt = cc->explain)) {
+ 	    tt = dupstring(tt);
+-	    if ((cc->mask & CC_EXPANDEXPL) && !parsestr(tt)) {
++	    if ((cc->mask & CC_EXPANDEXPL) && !parsestr(&tt)) {
+ 		singsub(&tt);
+ 		untokenize(tt);
+ 	    }
+@@ -3874,7 +3874,7 @@ makecomplistflags(Compctl cc, char *s, int incmd, int compadd)
+ 	}
+     } else if ((tt = cc->explain)) {
+ 	tt = dupstring(tt);
+-	if ((cc->mask & CC_EXPANDEXPL) && !parsestr(tt)) {
++	if ((cc->mask & CC_EXPANDEXPL) && !parsestr(&tt)) {
+ 	    singsub(&tt);
+ 	    untokenize(tt);
+ 	}
+diff --git a/Src/Zle/compresult.c b/Src/Zle/compresult.c
+index c0e5ff3..69d066c 100644
+--- a/Src/Zle/compresult.c
++++ b/Src/Zle/compresult.c
+@@ -1090,7 +1090,8 @@ do_single(Cmatch m)
+ 		    }
+ 		    if (tryit) {
+ 			noerrs = 1;
+-			parsestr(p);
++			p = dupstring(p);
++			parsestr(&p);
+ 			singsub(&p);
+ 			errflag = 0;
+ 			noerrs = ne;
+diff --git a/Src/exec.c b/Src/exec.c
+index 7817a64..27e235f 100644
+--- a/Src/exec.c
++++ b/Src/exec.c
+@@ -3631,17 +3631,18 @@ gethere(char **strp, int typ)
+ 	*bptr++ = '\n';
+     }
+     *t = '\0';
++    s = buf;
++    buf = dupstring(buf);
++    zfree(s, bsiz);
+     if (!qt) {
+ 	int ef = errflag;
+ 
+-	parsestr(buf);
++	parsestr(&buf);
+ 
+ 	if (!errflag)
+ 	    errflag = ef;
+     }
+-    s = dupstring(buf);
+-    zfree(buf, bsiz);
+-    return s;
++    return buf;
+ }
+ 
+ /* open here string fd */
+diff --git a/Src/init.c b/Src/init.c
+index 78f171d..485fb32 100644
+--- a/Src/init.c
++++ b/Src/init.c
+@@ -1143,10 +1143,13 @@ run_init_scripts(void)
+ 	    if (islogin)
+ 		sourcehome(".profile");
+ 	    noerrs = 2;
+-	    if (s && !parsestr(s)) {
+-		singsub(&s);
+-		noerrs = 0;
+-		source(s);
++	    if (s) {
++		s = dupstring(s);
++		if (!parsestr(&s)) {
++		    singsub(&s);
++		    noerrs = 0;
++		    source(s);
++		}
+ 	    }
+ 	    noerrs = 0;
+ 	} else
+diff --git a/Src/lex.c b/Src/lex.c
+index b8fe332..fa920bd 100644
+--- a/Src/lex.c
++++ b/Src/lex.c
+@@ -1693,17 +1693,27 @@ dquote_parse(char endchar, int sub)
+     return err;
+ }
+ 
+-/* Tokenize a string given in s. Parsing is done as in double *
+- * quotes.  This is usually called before singsub().          */
++/*
++ * Tokenize a string given in s. Parsing is done as in double
++ * quotes.  This is usually called before singsub().
++ *
++ * parsestr() is noisier, reporting an error if the parse failed.
++ *
++ * On entry, *s must point to a string allocated from the stack of
++ * exactly the right length, i.e. strlen(*s) + 1, as the string
++ * is used as the lexical token string whose memory management
++ * demands this.  Usually the input string will therefore be
++ * the result of an immediately preceding dupstring().
++ */
+ 
+ /**/
+ mod_export int
+-parsestr(char *s)
++parsestr(char **s)
+ {
+     int err;
+ 
+     if ((err = parsestrnoerr(s))) {
+-	untokenize(s);
++	untokenize(*s);
+ 	if (err > 32 && err < 127)
+ 	    zerr("parse error near `%c'", err);
+ 	else
+@@ -1714,18 +1724,20 @@ parsestr(char *s)
+ 
+ /**/
+ mod_export int
+-parsestrnoerr(char *s)
++parsestrnoerr(char **s)
+ {
+-    int l = strlen(s), err;
++    int l = strlen(*s), err;
+ 
+     lexsave();
+-    untokenize(s);
+-    inpush(dupstring(s), 0, NULL);
++    untokenize(*s);
++    inpush(dupstring(*s), 0, NULL);
+     strinbeg(0);
+     len = 0;
+-    bptr = tokstr = s;
++    bptr = tokstr = *s;
+     bsiz = l + 1;
+     err = dquote_parse('\0', 1);
++    if (tokstr)
++	*s = tokstr;
+     *bptr = '\0';
+     strinend();
+     inpop();
+diff --git a/Src/params.c b/Src/params.c
+index babf6f2..f7551b2 100644
+--- a/Src/params.c
++++ b/Src/params.c
+@@ -1241,7 +1241,8 @@ getarg(char **str, int *inv, Value v, int a2, zlong *w,
+     if (ishash && (keymatch || !rev))
+ 	remnulargs(s);
+     if (needtok) {
+-	if (parsestr(s))
++	s = dupstring(s);
++	if (parsestr(&s))
+ 	    return 0;
+ 	singsub(&s);
+     } else if (rev)
+diff --git a/Src/prompt.c b/Src/prompt.c
+index e51ce24..290f227 100644
+--- a/Src/prompt.c
++++ b/Src/prompt.c
+@@ -183,7 +183,7 @@ promptexpand(char *s, int ns, char *rs, char *Rs, unsigned int *txtchangep)
+ 	int oldval = lastval;
+ 
+ 	s = dupstring(s);
+-	if (!parsestr(s))
++	if (!parsestr(&s))
+ 	    singsub(&s);
+ 	/*
+ 	 * We don't need the special Nularg hack here and we're
+diff --git a/Src/subst.c b/Src/subst.c
+index a4df256..dcffe2f 100644
+--- a/Src/subst.c
++++ b/Src/subst.c
+@@ -1306,7 +1306,7 @@ get_intarg(char **s, int *delmatchp)
+     p = dupstring(*s + arglen);
+     *s = t + arglen;
+     *t = sav;
+-    if (parsestr(p))
++    if (parsestr(&p))
+ 	return -1;
+     singsub(&p);
+     if (errflag)
+@@ -1329,7 +1329,8 @@ subst_parse_str(char **sp, int single, int err)
+ 
+     *sp = s = dupstring(*sp);
+ 
+-    if (!(err ? parsestr(s) : parsestrnoerr(s))) {
++    if (!(err ? parsestr(&s) : parsestrnoerr(&s))) {
++	*sp = s;
+ 	if (!single) {
+             int qt = 0;
+ 
+@@ -1426,7 +1427,8 @@ check_colon_subscript(char *str, char **endp)
+     }
+     sav = **endp;
+     **endp = '\0';
+-    if (parsestr(str = dupstring(str)))
++    str = dupstring(str);
++    if (parsestr(&str))
+ 	return NULL;
+     singsub(&str);
+     remnulargs(str);
+diff --git a/Src/utils.c b/Src/utils.c
+index 26e2a5c..2c1d034 100644
+--- a/Src/utils.c
++++ b/Src/utils.c
+@@ -1440,7 +1440,7 @@ checkmailpath(char **s)
+ 		    setunderscore(*s);
+ 
+ 		    u = dupstring(u);
+-		    if (! parsestr(u)) {
++		    if (!parsestr(&u)) {
+ 			singsub(&u);
+ 			zputs(u, shout);
+ 			fputc('\n', shout);
+diff --git a/Test/D04parameter.ztst b/Test/D04parameter.ztst
+index bea9459..fa629b2 100644
+--- a/Test/D04parameter.ztst
++++ b/Test/D04parameter.ztst
+@@ -1551,3 +1551,10 @@
+ 0:Empty parameter shouldn't cause modifiers to crash the shell
+ >
+ >
++
++# The following tests the return behaviour of parsestr/parsestrnoerr
++  alias param-test-alias='print $'\''\x45xpanded in substitution'\'
++  param='$(param-test-alias)'
++  print ${(e)param}
++0:Alias expansion in command substitution in parameter evaluation
++>Expanded in substitution
+-- 
+2.7.4
 

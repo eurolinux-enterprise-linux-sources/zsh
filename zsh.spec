@@ -3,7 +3,7 @@
 Summary: Powerful interactive shell
 Name: zsh
 Version: 5.0.2
-Release: 25%{?dist}
+Release: 25%{?dist}.1
 License: MIT
 URL: http://zsh.sourceforge.net/
 Group: System Environment/Shells
@@ -237,6 +237,9 @@ fi
 %doc Doc/*.html
 
 %changelog
+* Mon Oct 17 2016 Kamil Dudka <kdudka@redhat.com> - 5.0.2-25.el7_3.1
+- fix crash while parsing the here-document syntax (#1374752)
+
 * Thu Jul 14 2016 Kamil Dudka <kdudka@redhat.com> - 5.0.2-25
 - improve use of new command substitution in completion (#1356388)
 
