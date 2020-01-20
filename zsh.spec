@@ -3,7 +3,7 @@
 Summary: Powerful interactive shell
 Name: zsh
 Version: 5.0.2
-Release: 25%{?dist}.1
+Release: 28%{?dist}
 License: MIT
 URL: http://zsh.sourceforge.net/
 Group: System Environment/Shells
@@ -70,6 +70,12 @@ Patch20: zsh-5.0.2-comp-args.patch
 # fix off-by-one error in completion utility cache code (#1344599)
 Patch21: zsh-5.0.2-comp-cache.patch
 
+# fix parsing of parameter subscript expression with NOEXEC (#1398740)
+Patch22: zsh-5.0.2-noexec-subscript.patch
+
+# zero new space allocated in prompt buffer (#1408619)
+Patch23: zsh-5.0.2-initialize-prompt-buffer.patch
+
 BuildRequires: coreutils sed ncurses-devel libcap-devel
 BuildRequires: texinfo texi2html gawk hostname
 Requires(post): /sbin/install-info grep
@@ -121,6 +127,8 @@ This package contains the Zsh manual in html format.
 %patch19 -p1
 %patch20 -p1
 %patch21 -p1
+%patch22 -p1
+%patch23 -p1
 
 cp -p %SOURCE7 .
 
@@ -237,7 +245,13 @@ fi
 %doc Doc/*.html
 
 %changelog
-* Mon Oct 17 2016 Kamil Dudka <kdudka@redhat.com> - 5.0.2-25.el7_3.1
+* Thu Feb 16 2017 Kamil Dudka <kdudka@redhat.com> - 5.0.2-28
+- zero new space allocated in prompt buffer (#1408619)
+
+* Mon Nov 28 2016 Kamil Dudka <kdudka@redhat.com> - 5.0.2-27
+- fix parsing of parameter subscript expression with NOEXEC (#1398740)
+
+* Mon Oct 17 2016 Kamil Dudka <kdudka@redhat.com> - 5.0.2-26
 - fix crash while parsing the here-document syntax (#1374752)
 
 * Thu Jul 14 2016 Kamil Dudka <kdudka@redhat.com> - 5.0.2-25

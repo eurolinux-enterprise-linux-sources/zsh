@@ -1,0 +1,26 @@
+From 277235463256a3a59649613ef50e80ec5460feb0 Mon Sep 17 00:00:00 2001
+From: Paulo Andrade <pandrade@redhat.com>
+Date: Tue, 3 Jan 2017 12:29:34 +0100
+Subject: [PATCH] 40260: zero new space allocated in prompt buffer
+
+Upstream-commit: 8d4c98540de9bcdba8565facc91fbc45855d27e2
+Signed-off-by: Kamil Dudka <kdudka@redhat.com>
+---
+ Src/prompt.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Src/prompt.c b/Src/prompt.c
+index 290f227..6eb98f3 100644
+--- a/Src/prompt.c
++++ b/Src/prompt.c
+@@ -862,6 +862,7 @@ addbufspc(int need)
+ 	if(need & 255)
+ 	    need = (need | 255) + 1;
+ 	bv->buf = realloc(bv->buf, bv->bufspc += need);
++	memset(bv->buf + bv->bufspc - need, 0, need);
+ 	bv->bp = bv->buf + bo;
+ 	if(bo1 != -1)
+ 	    bv->bp1 = bv->buf + bo1;
+-- 
+2.7.4
+
